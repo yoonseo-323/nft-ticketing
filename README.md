@@ -20,21 +20,21 @@
 ## 🚀 Quick Start
 
 ### 1. 패키지 설치
-\```bash
+```bash
 npm install
-\```
+```
 
 ### 2. 환경변수 설정
-\```bash
+```bash
 cp .env.example .env
 # .env 파일을 열어서 값 입력
-\```
+```
 
 ### 3. 서버 실행
-\```bash
+```bash
 npm run dev    # 개발 환경
 npm start      # 운영 환경
-\```
+```
 
 서버 실행 주소: `http://localhost:3000`
 
@@ -89,19 +89,19 @@ src/
 
 ## 🗄 DB 테이블
 
-\```
+```
 users            지갑 주소 기반 사용자
 events           공연 정보
 seats            좌석 정보
 tickets          발행된 NFT 티켓 (온체인 캐싱)
 market_listings  양도 마켓 리스팅
-\```
+```
 
 ---
 
 ## ⚙️ 환경변수
 
-\```
+```
 PORT=3000
 JWT_SECRET=
 DATABASE_URL=postgresql://postgres:비밀번호@localhost:5432/nft_ticketing
@@ -110,7 +110,7 @@ OWNER_PRIVATE_KEY=
 TICKET_NFT_ADDRESS=
 TICKET_MARKET_ADDRESS=
 IDENTITY_REGISTRY_ADDRESS=
-\```
+```
 
 ---
 
