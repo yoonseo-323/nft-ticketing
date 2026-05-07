@@ -42,7 +42,7 @@ npm start      # 운영 환경
 
 ## 📁 프로젝트 구조
 
-\```
+```
 src/
 ├── config/          # 블록체인 설정
 ├── contracts/       # ABI 및 컨트랙트 인스턴스
@@ -51,7 +51,7 @@ src/
 ├── models/          # DB 연결
 ├── routes/          # API 라우트
 └── app.js
-\```
+```
 
 ---
 
