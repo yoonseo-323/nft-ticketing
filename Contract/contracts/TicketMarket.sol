@@ -87,7 +87,7 @@ contract TicketMarket is Ownable, ReentrancyGuard {
         // 구매자에게 NFT 전송
         ticketNFT.safeTransferFrom(seller, msg.sender, tokenId);
 
-        // 판매자에게 ETH 즉시 송금 (와이어프레임 조건: 판매자에게 즉시 송금)
+        // 판매자에게 ETH 즉시 송금
         (bool success, ) = payable(seller).call{value: price}("");
         require(success, "TicketMarket: ETH transfer failed");
 
