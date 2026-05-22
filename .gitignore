@@ -1,2 +1,11 @@
 node_modules/
 .env
+
+# contracts
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+contracts/deployed-addresses.json
+
+# backend
+backend/.env
