@@ -183,6 +183,185 @@ POST /auth/login         → 인증 불필요
 
 ---
 
+---
+
+### API 명세
+
+> 인증 필요한 요청은 헤더에 `Authorization: Bearer {token}` 포함
+
+#### 인증
+
+**POST /auth/register** — 회원가입
+```json
+// Request
+{ "email": "test@test.com", "password": "1234", "nickname": "홍길동" }
+
+// Response 201
+{
+  "token": "eyJ...",
+  "user": { "id": "uuid", "email": "test@test.com", "nickname": "홍길동", "role": "USER", "wallet_address": "0x..." }
+}
+```
+
+**POST /auth/login** — 로그인
+```json
+// Request
+{ "email": "test@test.com", "password": "1234" }
+
+// Response 200
+{
+  "token": "eyJ...",
+  "user": { "id": "uuid", "email": "test@test.com", "nickname": "홍길동", "role": "USER", "wallet_address": "0x..." }
+}
+```
+
+**GET /auth/me** — 내 정보 조회 `🔒`
+```json
+// Response 200
+{
+  "id": "uuid", "email": "test@test.com", "nickname": "홍길동",
+  "role": "USER", "wallet_address": "0x...", "is_kyc": true,
+  "bank_name": "카카오뱅크", "bank_account": "1234-5678", "bank_holder": "홍길동",
+  "created_at": "2026-05-22T00:00:00Z"
+}
+```
+
+**PUT /auth/bank** — 정산 계좌 등록 `🔒`
+```json
+// Request
+{ "bank_name": "카카오뱅크", "bank_account": "1234-5678", "bank_holder": "홍길동" }
+
+// Response 200
+{ "ok": true }
+```
+
+**DELETE /auth/withdraw** — 회원 탈퇴 `🔒`
+```json
+// Response 200
+{ "ok": true, "message": "회원 탈퇴가 완료되었습니다" }
+```
+
+---
+
+#### 공연
+
+**GET /event** — 공연 목록
+```json
+// Response 200
+[
+  { "id": "uuid", "name": "BTS World Tour 2026", "venue": "KSPO DOME",
+    "event_date": "2026-07-10T19:00:00+09", "original_price": "165000", "total_seats": 100 }
+]
+```
+
+**GET /event/:id** — 공연 상세
+```json
+// Response 200
+{ "id": "uuid", "name": "BTS World Tour 2026", "venue": "KSPO DOME",
+  "event_date": "2026-07-10T19:00:00+09", "original_price": "165000", "total_seats": 100 }
+```
+
+**GET /event/:id/seats** — 좌석 목록
+```json
+// Response 200
+[
+  { "id": "uuid", "seat_number": "A1", "status": "AVAILABLE" },
+  { "id": "uuid", "seat_number": "A2", "status": "SOLD" }
+]
+```
+
+---
+
+#### 티켓
+
+**POST /ticket/purchase** — 티켓 구매 `🔒`
+```json
+// Request
+{ "eventId": "uuid", "seatId": "uuid" }
+
+// Response 200
+{ "ok": true, "tokenId": 0, "txHash": "0x..." }
+```
+
+**GET /ticket/my** — 내 티켓 목록 `🔒`
+```json
+// Response 200
+[
+  { "id": "uuid", "token_id": 0, "status": "CONFIRMED", "qr_version": 0,
+    "event_name": "BTS World Tour 2026", "venue": "KSPO DOME",
+    "event_date": "2026-07-10T19:00:00+09", "original_price": "165000",
+    "seat_number": "A1", "created_at": "2026-05-22T00:00:00Z" }
+]
+```
+
+**GET /ticket/qr/:tokenId** — QR 데이터 생성 `🔒`
+```json
+// Response 200
+{
+  "tokenId": 0, "qrVersion": 0,
+  "timestamp": 1748000000, "expiresIn": 60,
+  "qrData": "0:uuid:0:1748000000:abc123..."
+}
+// qrData를 react-qr-code에 그대로 넘겨서 QR 렌더링
+// 60초마다 재요청하여 QR 갱신
+```
+
+**POST /ticket/enter** — QR 입장 처리 `🔒 ADMIN`
+```json
+// Request
+{ "qrData": "0:uuid:0:1748000000:abc123..." }
+
+// Response 200 (성공)
+{ "ok": true, "nickname": "홍길동", "eventName": "BTS World Tour 2026", "seatNumber": "A1" }
+
+// Response 401 (실패)
+{ "error": "QR 코드가 만료되었습니다 (1분)" }
+```
+
+**POST /ticket/cancel/:ticketId** — 티켓 취소 `🔒`
+```json
+// Response 200
+{ "ok": true, "message": "티켓이 취소되었습니다 (환불은 별도 처리)" }
+```
+
+---
+
+#### 양도 마켓
+
+**GET /market** — 판매 중인 티켓 목록
+```json
+// Response 200
+[
+  { "id": "uuid", "price": "170000", "original_price": "165000",
+    "token_id": 0, "event_name": "BTS World Tour 2026", "venue": "KSPO DOME",
+    "event_date": "2026-07-10T19:00:00+09", "seat_number": "A1",
+    "seller_nickname": "홍길동", "created_at": "2026-05-22T00:00:00Z" }
+]
+```
+
+**POST /market/list** — 양도 등록 `🔒`
+```json
+// Request
+{ "tokenId": 0, "price": 170000 }
+
+// Response 200
+{ "ok": true, "txHash": "0x..." }
+```
+
+**POST /market/buy/:listingId** — 양도 구매 `🔒`
+```json
+// Response 200
+{ "ok": true, "message": "구매 완료. 정산은 판매자 등록 계좌로 처리됩니다." }
+```
+
+**POST /market/cancel/:listingId** — 양도 취소 `🔒`
+```json
+// Response 200
+{ "ok": true }
+```
+
+---
+
 ### 권장 라이브러리
 ```bash
 npm install axios         # API 호출
