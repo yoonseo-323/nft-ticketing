@@ -114,13 +114,93 @@
 
 ## 프론트엔드
 
-| 화면 | 기능 |
-|---|---|
-| 공연 목록 (`/`) | 전체 공연 조회 |
-| 공연 상세 (`/events/[id]`) | 공연 정보 확인, 좌석 선택, 구매 (KRW 결제 UI) |
-| 내 티켓 (`/tickets`) | 보유 티켓 목록, QR 코드 조회 |
-| 양도 마켓 (`/market`) | 양도 등록 및 구매 (KRW 결제 UI) |
-| 입장 게이트 (`/gate`) | ADMIN 전용. 모바일 브라우저 카메라로 QR 스캔 → 서버에 전송 → 성공(초록)/실패(빨강) 결과 표시 후 자동으로 스캔 대기 화면으로 복귀 |
+### 기술 스택
+- Next.js (App Router)
+- 백엔드 API: `http://localhost:3000`
+- 인증: 로그인 후 받은 JWT 토큰을 `localStorage`에 저장, 모든 인증 요청 헤더에 `Authorization: Bearer {token}` 포함
+
+---
+
+### 공통 사항
+
+**토큰 관리**
+- 로그인·회원가입 성공 시 응답의 `token`을 `localStorage.setItem('token', token)`으로 저장
+- 로그아웃 시 `localStorage.removeItem('token')`
+- 인증이 필요한 페이지는 토큰 없으면 로그인 페이지로 리다이렉트
+
+**API 호출 기본 패턴**
+```
+GET  /event              → 인증 불필요
+POST /auth/login         → 인증 불필요
+그 외 대부분             → Authorization 헤더 필요
+```
+
+---
+
+### 화면별 API 명세
+
+#### `/` 공연 목록
+- `GET /event` → 공연 카드 목록 렌더링
+- 응답 필드: `id`, `name`, `venue`, `event_date`, `original_price`, `total_seats`
+- 카드 클릭 시 `/events/[id]`로 이동
+
+#### `/events/[id]` 공연 상세
+- `GET /event/:id` → 공연 정보
+- `GET /event/:id/seats` → 좌석 목록 및 상태 (`AVAILABLE` / `RESERVED` / `SOLD` / `USED`)
+- 좌석 선택 후 "구매" 버튼 → `POST /ticket/purchase` `{ eventId, seatId }`
+- AVAILABLE 좌석만 선택 가능, 나머지는 비활성화
+
+#### `/login` 로그인 · 회원가입
+- 로그인: `POST /auth/login` `{ email, password }` → `token` 저장
+- 회원가입: `POST /auth/register` `{ email, password, nickname }` → `token` 저장
+- 회원가입은 IdentityRegistry 등록까지 포함되어 있어 응답이 수초 걸릴 수 있음
+
+#### `/tickets` 내 티켓
+- `GET /ticket/my` → 티켓 목록
+- 응답 필드: `token_id`, `status`, `event_name`, `venue`, `event_date`, `seat_number`
+- "QR 보기" 버튼 → `GET /ticket/qr/:tokenId` → `qrData`를 QR 라이브러리로 렌더링
+- QR은 1분 후 만료 → 60초 타이머 후 자동 재요청
+- "티켓 취소" 버튼 → `POST /ticket/cancel/:ticketId`
+
+#### `/market` 양도 마켓
+- `GET /market` → 판매 중인 티켓 목록
+- 응답 필드: `id`, `price`, `event_name`, `venue`, `event_date`, `seat_number`, `seller_nickname`
+- "구매" 버튼 → `POST /market/buy/:listingId`
+- 내 티켓 양도 등록: `POST /market/list` `{ tokenId, price }`
+- 양도 취소: `POST /market/cancel/:listingId`
+
+#### `/mypage` 마이페이지 (선택)
+- `GET /auth/me` → 내 정보 (닉네임, 이메일, 지갑 주소, 계좌 정보)
+- 정산 계좌 등록: `PUT /auth/bank` `{ bank_name, bank_account, bank_holder }`
+- 회원 탈퇴: `DELETE /auth/withdraw`
+
+#### `/gate` 입장 게이트 (ADMIN 전용)
+- 로그인 role이 `ADMIN`인 경우만 접근 허용
+- `html5-qrcode` 라이브러리로 카메라 QR 스캔
+- 스캔된 `qrData` → `POST /ticket/enter` `{ qrData }`
+- 성공: 초록 화면 + 이름·좌석 표시, 3초 후 스캔 대기로 복귀
+- 실패: 빨간 화면 + 오류 메시지, 3초 후 복귀
+
+---
+
+### 권장 라이브러리
+```bash
+npm install axios         # API 호출
+npm install react-qr-code # QR 코드 표시 (/tickets)
+npm install html5-qrcode  # QR 코드 스캔 (/gate)
+```
+
+### 화면 구성
+
+| 화면 | 인증 필요 | ADMIN 전용 |
+|---|---|---|
+| `/` 공연 목록 | X | X |
+| `/events/[id]` 공연 상세 | X | X |
+| `/login` 로그인·회원가입 | X | X |
+| `/tickets` 내 티켓 | O | X |
+| `/market` 양도 마켓 | 구매·등록만 | X |
+| `/mypage` 마이페이지 | O | X |
+| `/gate` 입장 게이트 | O | O |
 
 ---
 
