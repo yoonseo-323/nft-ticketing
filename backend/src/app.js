@@ -42,12 +42,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 서버 실행 중: http://localhost:${PORT}`);
 
-  if (process.env.TICKET_NFT_ADDRESS) {
-    try {
-      const { startChainListener } = require("./listeners/chainListener");
-      startChainListener();
-    } catch (err) {
-      console.warn("⚠️ 체인 리스너 시작 실패:", err.message);
-    }
-  }
 });
