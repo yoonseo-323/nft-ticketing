@@ -1,10 +1,11 @@
 const express = require("express");
 const router = express.Router();
-const crypto = require("crypto");
+const { ethers } = require("ethers");
 const db = require("../models/db");
 const auth = require("../middlewares/auth");
 const admin = require("../middlewares/admin");
-const { identityRegistry, ticketNFT } = require("../contracts");
+const { ticketNFT } = require("../contracts");
+const { ownerWallet } = require("../config/chain");
 
 // POST /ticket/purchase — 좌석 선점 + mock 결제 + NFT 발행
 router.post("/purchase", auth, async (req, res) => {
@@ -134,10 +135,7 @@ router.get("/qr/:tokenId", auth, async (req, res) => {
 
     const timestamp = Math.floor(Date.now() / 1000);
     const payload = `${tokenId}:${ticket.owner_id}:${ticket.qr_version}:${timestamp}`;
-    const signature = crypto
-      .createHmac("sha256", process.env.JWT_SECRET)
-      .update(payload)
-      .digest("hex");
+    const signature = await ownerWallet.signMessage(payload);
 
     res.json({
       tokenId,
@@ -168,13 +166,10 @@ router.post("/enter", admin, async (req, res) => {
       return res.status(401).json({ error: "QR 코드가 만료되었습니다 (1분)" });
     }
 
-    // 서명 검증
+    // ECDSA 서명 검증: 서명에서 주소 복원 후 서버 지갑 주소와 비교
     const payload = `${tokenId}:${userId}:${qrVersion}:${timestamp}`;
-    const expected = crypto
-      .createHmac("sha256", process.env.JWT_SECRET)
-      .update(payload)
-      .digest("hex");
-    if (signature !== expected) {
+    const recoveredAddress = ethers.verifyMessage(payload, signature);
+    if (recoveredAddress.toLowerCase() !== ownerWallet.address.toLowerCase()) {
       return res.status(401).json({ error: "QR 서명이 유효하지 않습니다" });
     }
 

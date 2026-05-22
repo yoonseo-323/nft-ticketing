@@ -70,7 +70,7 @@
 - 동시에 같은 좌석을 선택하는 경우 DB 트랜잭션으로 선착순 1명만 RESERVED로 처리한다.
 
 ### QR 입장권
-- QR 데이터는 `(tokenId + userId + timestamp)`를 서버 개인키로 ECDSA 서명해 생성한다.
+- QR 데이터는 `(tokenId + userId + qrVersion + timestamp)`를 서버 이더리움 개인키로 ECDSA 서명해 생성한다. ethers.js의 `signMessage()`를 사용하며, 검증 시 `verifyMessage()`로 서명자 주소를 복원해 서버 지갑 주소와 비교한다.
 - QR 유효 시간은 **1분**. 만료된 QR은 입장 처리가 거부되며, 앱에서 만료 전 자동 갱신한다.
 - 입장 처리 후 QR 버전(qrVersion)을 증가시켜 이전 QR을 무효화한다.
 - 입장이 완료되면 해당 NFT를 소각(burn)해 재사용을 방지한다.
