@@ -2,52 +2,51 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 interface IIdentityRegistry {
-    function isVerified(address _user) external view returns (bool);
+    function isVerified(address wallet) external view returns (bool);
 }
 
-contract TicketNFT is ERC721, ERC721Burnable, Ownable {
+contract TicketNFT is ERC721, Ownable {
     IIdentityRegistry public identityRegistry;
+
     uint256 private _nextTokenId;
     mapping(uint256 => string) public ticketSeats;
     mapping(uint256 => uint256) public ticketPrices;
+
+    event TicketMinted(uint256 indexed tokenId, address indexed to);
+    event TicketBurned(uint256 indexed tokenId);
 
     constructor(address _identityRegistry) ERC721("TicketNFT", "TKT") Ownable(msg.sender) {
         identityRegistry = IIdentityRegistry(_identityRegistry);
     }
 
-    /**
-     * @dev IdentityRegistry 컨트랙트 주소 업데이트
-     * @param _identityRegistry 새로운 IdentityRegistry 주소
-     */
     function setIdentityRegistry(address _identityRegistry) external onlyOwner {
         identityRegistry = IIdentityRegistry(_identityRegistry);
     }
 
-    /**
-     * @dev 인증된 사용자에게 좌석 정보와 정가가 포함된 새로운 티켓 NFT 발행
-     * @param to 티켓을 받을 사용자 주소
-     * @param seatInfo 부여할 좌석 정보 (예: "A구역-1열-5번")
-     * @param originalPrice 티켓의 정가 (Wei 단위)
-     */
-    function mint(address to, string calldata seatInfo, uint256 originalPrice) external onlyOwner {
+    function mint(address to, string calldata seatInfo, uint256 originalPrice) external onlyOwner returns (uint256) {
         require(identityRegistry.isVerified(to), "TicketNFT: User is not KYC verified");
         uint256 tokenId = _nextTokenId++;
         ticketSeats[tokenId] = seatInfo;
         ticketPrices[tokenId] = originalPrice;
         _safeMint(to, tokenId);
+        emit TicketMinted(tokenId, to);
+        return tokenId;
     }
 
-    /**
-     * @dev 입장 후 티켓 소각
-     * @param tokenId 소각할 티켓의 ID
-     */
-    function burn(uint256 tokenId) public override onlyOwner {
+    // 백엔드가 KRW 결제 확인 후 양도 시 직접 소유권 이전
+    function adminTransfer(address from, address to, uint256 tokenId) external onlyOwner {
+        require(identityRegistry.isVerified(to), "TicketNFT: Buyer is not KYC verified");
+        _transfer(from, to, tokenId);
+    }
+
+    // 입장 완료 후 소각
+    function burn(uint256 tokenId) external onlyOwner {
         delete ticketSeats[tokenId];
         delete ticketPrices[tokenId];
-        _update(address(0), tokenId, address(0));
+        _burn(tokenId);
+        emit TicketBurned(tokenId);
     }
 }

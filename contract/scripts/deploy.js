@@ -2,26 +2,33 @@ import pkg from "hardhat";
 const { ethers } = pkg;
 
 async function main() {
-  const currentTimestampInSeconds = Math.round(Date.now() / 1000);
-  const unlockTime = currentTimestampInSeconds + 60; // Unlock in 1 minute
+  const [deployer] = await ethers.getSigners();
+  console.log("배포 계정:", deployer.address);
 
-  const lockedAmount = ethers.parseEther("0.001");
+  // 1. IdentityRegistry 배포
+  const IdentityRegistry = await ethers.getContractFactory("IdentityRegistry");
+  const identityRegistry = await IdentityRegistry.deploy();
+  await identityRegistry.waitForDeployment();
+  console.log("IdentityRegistry:", identityRegistry.target);
 
-  const lock = await ethers.deployContract("Lock", [unlockTime], {
-    value: lockedAmount,
-  });
+  // 2. TicketNFT 배포 (IdentityRegistry 주소 주입)
+  const TicketNFT = await ethers.getContractFactory("TicketNFT");
+  const ticketNFT = await TicketNFT.deploy(identityRegistry.target);
+  await ticketNFT.waitForDeployment();
+  console.log("TicketNFT:", ticketNFT.target);
 
-  await lock.waitForDeployment();
+  // 3. TicketMarket 배포
+  const TicketMarket = await ethers.getContractFactory("TicketMarket");
+  const ticketMarket = await TicketMarket.deploy();
+  await ticketMarket.waitForDeployment();
+  console.log("TicketMarket:", ticketMarket.target);
 
-  console.log(
-    `Lock with ${ethers.formatEther(
-      lockedAmount
-    )} ETH and unlock timestamp ${unlockTime} deployed to ${lock.target}`
-  );
+  console.log("\n.env에 아래 값을 복사하세요:");
+  console.log(`IDENTITY_REGISTRY_ADDRESS=${identityRegistry.target}`);
+  console.log(`TICKET_NFT_ADDRESS=${ticketNFT.target}`);
+  console.log(`TICKET_MARKET_ADDRESS=${ticketMarket.target}`);
 }
 
-// We recommend this pattern to be able to use async/await everywhere
-// and properly handle errors.
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;

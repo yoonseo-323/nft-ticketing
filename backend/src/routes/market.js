@@ -8,8 +8,11 @@ const { ticketNFT, ticketMarket } = require("../contracts");
 router.get("/", async (req, res) => {
   try {
     const result = await db.query(
-      `SELECT ml.*, t.token_id, e.name AS event_name, e.event_date, s.seat_number,
-              u.wallet AS seller_wallet
+      `SELECT ml.id, ml.price, ml.original_price, ml.created_at,
+              t.token_id,
+              e.name AS event_name, e.venue, e.event_date,
+              s.seat_number,
+              u.nickname AS seller_nickname
        FROM market_listings ml
        JOIN tickets t ON ml.ticket_id = t.id
        JOIN events e ON t.event_id = e.id
@@ -24,71 +27,68 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST /market/list — 판매 등록
-// body: { tokenId, price }  (price: KRW 원 단위)
+// POST /market/list — 양도 등록
 router.post("/list", auth, async (req, res) => {
   try {
-    const { wallet } = req.user;
     const { tokenId, price } = req.body;
-
     if (!tokenId || !price) {
       return res.status(400).json({ error: "tokenId, price 필수" });
     }
 
-    // 티켓 소유 확인
+    // 티켓 소유 및 상태 확인
     const ticketResult = await db.query(
-      `SELECT t.*, e.original_price, u.wallet
+      `SELECT t.*, e.original_price
        FROM tickets t
-       JOIN users u ON t.owner_id = u.id
        JOIN events e ON t.event_id = e.id
-       WHERE t.token_id = $1 AND t.status = 'CONFIRMED'`,
-      [parseInt(tokenId)]
+       WHERE t.token_id = $1 AND t.owner_id = $2 AND t.status = 'CONFIRMED'`,
+      [parseInt(tokenId), req.user.userId]
     );
     if (ticketResult.rows.length === 0) {
-      return res.status(404).json({ error: "확정된 티켓이 없습니다" });
+      return res.status(404).json({ error: "본인 소유의 확정된 티켓이 없습니다" });
     }
     const ticket = ticketResult.rows[0];
 
-    if (ticket.wallet.toLowerCase() !== wallet.toLowerCase()) {
-      return res.status(403).json({ error: "본인 티켓만 판매 가능" });
-    }
-
-    // 가격 상한 검증 (110%)
+    // 가격 상한 130% 검증
     const originalPrice = parseFloat(ticket.original_price);
-    if (price > originalPrice * 1.1) {
+    if (price > originalPrice * 1.3) {
       return res.status(400).json({
-        error: `가격 상한 초과: 최대 ${Math.floor(originalPrice * 1.1)}원`,
+        error: `가격 상한 초과: 최대 ${Math.floor(originalPrice * 1.3).toLocaleString()}원`,
       });
     }
 
-    // 이미 리스팅 중인지 확인
+    // 이미 등록된 리스팅 확인
     const existing = await db.query(
-      `SELECT id FROM market_listings WHERE ticket_id = $1 AND status = 'ACTIVE'`,
+      "SELECT id FROM market_listings WHERE ticket_id = $1 AND status = 'ACTIVE'",
       [ticket.id]
     );
     if (existing.rows.length > 0) {
       return res.status(409).json({ error: "이미 판매 등록된 티켓입니다" });
     }
 
-    // 온체인 list (가격을 wei 단위로 변환: 1 KRW = 1 wei 매핑, 식별용)
-    const userResult = await db.query(`SELECT id FROM users WHERE wallet = $1`, [wallet]);
-    const sellerId = userResult.rows[0].id;
+    // 정산 계좌 확인
+    const userResult = await db.query(
+      "SELECT bank_name, bank_account, wallet_address FROM users WHERE id = $1",
+      [req.user.userId]
+    );
+    const user = userResult.rows[0];
+    if (!user.bank_name || !user.bank_account) {
+      return res.status(400).json({ error: "정산 계좌를 먼저 등록해주세요" });
+    }
 
+    // 온체인 리스팅 (가격 상한 컨트랙트에도 강제)
     const tx = await ticketMarket.list(
       parseInt(tokenId),
       BigInt(price),
-      BigInt(Math.floor(originalPrice))
+      BigInt(Math.floor(originalPrice)),
+      user.wallet_address
     );
     await tx.wait();
 
-    // market 컨트랙트가 transferFrom 할 수 있도록 approve
-    await ticketNFT.approveMarket(await ticketMarket.getAddress(), parseInt(tokenId));
-
-    // DB listing 생성
+    // DB 리스팅 생성
     await db.query(
       `INSERT INTO market_listings (ticket_id, seller_id, price, original_price, status)
        VALUES ($1, $2, $3, $4, 'ACTIVE')`,
-      [ticket.id, sellerId, price, originalPrice]
+      [ticket.id, req.user.userId, price, originalPrice]
     );
 
     res.json({ ok: true, txHash: tx.hash });
@@ -97,16 +97,17 @@ router.post("/list", auth, async (req, res) => {
   }
 });
 
-// POST /market/buy/:listingId — 티켓 구매
+// POST /market/buy/:listingId — 양도 구매 (mock 결제)
 router.post("/buy/:listingId", auth, async (req, res) => {
   try {
-    const { wallet } = req.user;
     const { listingId } = req.params;
 
     const listingResult = await db.query(
-      `SELECT ml.*, t.token_id, t.id AS ticket_id
+      `SELECT ml.*, t.token_id, t.id AS ticket_id, t.seat_id, t.qr_version,
+              u.wallet_address AS seller_wallet
        FROM market_listings ml
        JOIN tickets t ON ml.ticket_id = t.id
+       JOIN users u ON ml.seller_id = u.id
        WHERE ml.id = $1 AND ml.status = 'ACTIVE'`,
       [listingId]
     );
@@ -115,59 +116,72 @@ router.post("/buy/:listingId", auth, async (req, res) => {
     }
     const listing = listingResult.rows[0];
 
-    // KYC 확인
-    const kycRow = await db.query(`SELECT is_kyc FROM users WHERE wallet = $1`, [wallet]);
-    if (!kycRow.rows[0]?.is_kyc) {
-      return res.status(403).json({ error: "KYC 인증이 필요합니다" });
+    // 본인 티켓 구매 방지
+    if (listing.seller_id === req.user.userId) {
+      return res.status(400).json({ error: "본인 티켓은 구매할 수 없습니다" });
     }
 
-    // 구매자 DB id
-    const buyerResult = await db.query(`SELECT id FROM users WHERE wallet = $1`, [wallet]);
-    const buyerId = buyerResult.rows[0].id;
+    // 구매자 지갑 주소 조회
+    const buyerResult = await db.query(
+      "SELECT wallet_address FROM users WHERE id = $1",
+      [req.user.userId]
+    );
+    const buyerWallet = buyerResult.rows[0].wallet_address;
 
-    // 온체인 구매 (KRW 결제는 오프체인 처리됐다고 가정)
-    const tx = await ticketMarket.buy(parseInt(listing.token_id), wallet);
-    await tx.wait();
+    // 온체인 리스팅 완료 처리
+    const saleTx = await ticketMarket.completeSale(parseInt(listing.token_id), buyerWallet);
+    await saleTx.wait();
 
-    // DB 소유권 이전
-    await db.query(`UPDATE tickets SET owner_id = $1 WHERE id = $2`, [buyerId, listing.ticket_id]);
-    await db.query(`UPDATE market_listings SET status = 'SOLD' WHERE id = $1`, [listingId]);
+    // NFT 소유권 이전 (TicketNFT.adminTransfer)
+    const transferTx = await ticketNFT.adminTransfer(
+      listing.seller_wallet,
+      buyerWallet,
+      parseInt(listing.token_id)
+    );
+    await transferTx.wait();
 
-    res.json({ ok: true, txHash: tx.hash });
+    // DB 소유권 이전 + QR 무효화
+    await db.query(
+      "UPDATE tickets SET owner_id = $1, qr_version = qr_version + 1 WHERE id = $2",
+      [req.user.userId, listing.ticket_id]
+    );
+    await db.query(
+      "UPDATE market_listings SET status = 'SOLD' WHERE id = $1",
+      [listingId]
+    );
+
+    res.json({ ok: true, message: "구매 완료. 정산은 판매자 등록 계좌로 처리됩니다." });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /market/cancel/:listingId — 판매 취소
+// POST /market/cancel/:listingId — 양도 취소
 router.post("/cancel/:listingId", auth, async (req, res) => {
   try {
-    const { wallet } = req.user;
     const { listingId } = req.params;
 
     const listingResult = await db.query(
-      `SELECT ml.*, t.token_id, u.wallet AS seller_wallet
+      `SELECT ml.*, t.token_id
        FROM market_listings ml
        JOIN tickets t ON ml.ticket_id = t.id
-       JOIN users u ON ml.seller_id = u.id
-       WHERE ml.id = $1 AND ml.status = 'ACTIVE'`,
-      [listingId]
+       WHERE ml.id = $1 AND ml.seller_id = $2 AND ml.status = 'ACTIVE'`,
+      [listingId, req.user.userId]
     );
     if (listingResult.rows.length === 0) {
-      return res.status(404).json({ error: "활성 리스팅이 없습니다" });
+      return res.status(404).json({ error: "취소 가능한 리스팅이 없습니다" });
     }
     const listing = listingResult.rows[0];
-
-    if (listing.seller_wallet.toLowerCase() !== wallet.toLowerCase()) {
-      return res.status(403).json({ error: "판매자만 취소 가능" });
-    }
 
     const tx = await ticketMarket.cancel(parseInt(listing.token_id));
     await tx.wait();
 
-    await db.query(`UPDATE market_listings SET status = 'CANCELLED' WHERE id = $1`, [listingId]);
+    await db.query(
+      "UPDATE market_listings SET status = 'CANCELLED' WHERE id = $1",
+      [listingId]
+    );
 
-    res.json({ ok: true, txHash: tx.hash });
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

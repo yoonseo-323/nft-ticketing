@@ -3,7 +3,7 @@ const { ethers } = require("ethers");
 const { ownerWallet } = require("../config/chain");
 const path = require("path");
 
-const artifactBase = path.join(__dirname, "../../../contracts/artifacts/contracts");
+const artifactBase = path.join(__dirname, "../../../contract/artifacts/contracts");
 
 const identityRegistryABI = require(`${artifactBase}/IdentityRegistry.sol/IdentityRegistry.json`).abi;
 const ticketNFTABI = require(`${artifactBase}/TicketNFT.sol/TicketNFT.json`).abi;

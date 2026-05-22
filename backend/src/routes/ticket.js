@@ -1,101 +1,110 @@
 const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
-const jwt = require("jsonwebtoken");
 const db = require("../models/db");
 const auth = require("../middlewares/auth");
+const admin = require("../middlewares/admin");
 const { identityRegistry, ticketNFT } = require("../contracts");
 
-// POST /ticket/kyc — 지갑 주소를 IdentityRegistry에 등록 (KYC 완료 처리)
-router.post("/kyc", auth, async (req, res) => {
+// POST /ticket/purchase — 좌석 선점 + mock 결제 + NFT 발행
+router.post("/purchase", auth, async (req, res) => {
+  const client = await db.getClient();
   try {
-    const { wallet } = req.user;
-
-    const already = await identityRegistry.isRegistered(wallet);
-    if (already) {
-      return res.status(409).json({ error: "이미 KYC 등록된 지갑입니다" });
-    }
-
-    const tx = await identityRegistry.register(wallet);
-    await tx.wait();
-
-    await db.query(`UPDATE users SET is_kyc = true WHERE wallet = $1`, [wallet]);
-
-    res.json({ ok: true, tx: tx.hash });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /ticket/mint — NFT 티켓 발행
-// body: { eventId, seatId }
-router.post("/mint", auth, async (req, res) => {
-  try {
-    const { wallet } = req.user;
     const { eventId, seatId } = req.body;
-
     if (!eventId || !seatId) {
       return res.status(400).json({ error: "eventId, seatId 필수" });
     }
 
-    // KYC 확인
-    const kycRow = await db.query(`SELECT is_kyc FROM users WHERE wallet = $1`, [wallet]);
-    if (!kycRow.rows[0]?.is_kyc) {
-      return res.status(403).json({ error: "KYC 인증이 필요합니다" });
-    }
+    await client.query("BEGIN");
 
-    // 좌석 유효성 + 이벤트 확인
-    const seatResult = await db.query(
-      `SELECT s.*, e.original_price FROM seats s JOIN events e ON s.event_id = e.id
-       WHERE s.id = $1 AND s.event_id = $2 AND s.status = 'AVAILABLE'`,
+    // 좌석 선점 (트랜잭션 + 락으로 동시 요청 차단)
+    const seatResult = await client.query(
+      `SELECT s.*, e.original_price FROM seats s
+       JOIN events e ON s.event_id = e.id
+       WHERE s.id = $1 AND s.event_id = $2 AND s.status = 'AVAILABLE'
+       FOR UPDATE`,
       [seatId, eventId]
     );
     if (seatResult.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res.status(400).json({ error: "좌석이 없거나 이미 예약됨" });
     }
     const seat = seatResult.rows[0];
 
-    // 좌석 RESERVED 처리
-    await db.query(`UPDATE seats SET status = 'RESERVED' WHERE id = $1`, [seatId]);
+    await client.query(
+      "UPDATE seats SET status = 'RESERVED', reserved_at = NOW() WHERE id = $1",
+      [seatId]
+    );
 
-    // tokenId: 현재 시각 기반 unique number (실제 서비스에선 sequence 사용)
-    const tokenId = Date.now();
-
-    // 유저 DB row 조회
-    const userResult = await db.query(`SELECT id FROM users WHERE wallet = $1`, [wallet]);
-    const userId = userResult.rows[0].id;
-
-    // DB에 PENDING 상태로 티켓 기록
-    const ticketResult = await db.query(
-      `INSERT INTO tickets (token_id, owner_id, event_id, seat_id, status, qr_version)
-       VALUES ($1, $2, $3, $4, 'PENDING', 0) RETURNING id`,
-      [tokenId, userId, eventId, seatId]
+    // PENDING 티켓 생성
+    const ticketResult = await client.query(
+      `INSERT INTO tickets (owner_id, event_id, seat_id, status, qr_version)
+       VALUES ($1, $2, $3, 'PENDING', 0) RETURNING id`,
+      [req.user.userId, eventId, seatId]
     );
     const ticketDbId = ticketResult.rows[0].id;
 
-    // 온체인 mint (비동기 — 이벤트 리스너가 CONFIRMED 처리)
-    const tx = await ticketNFT.mint(wallet, tokenId);
-    await db.query(`UPDATE tickets SET tx_hash = $1 WHERE id = $2`, [tx.hash, ticketDbId]);
+    await client.query("COMMIT");
 
-    res.json({ ok: true, tokenId, txHash: tx.hash });
+    // 사용자 지갑 주소 조회
+    const userResult = await db.query(
+      "SELECT wallet_address FROM users WHERE id = $1",
+      [req.user.userId]
+    );
+    const walletAddress = userResult.rows[0].wallet_address;
+
+    // 온체인 mint (mock 결제 완료로 간주)
+    const tx = await ticketNFT.mint(
+      walletAddress,
+      seat.seat_number,
+      BigInt(seat.original_price)
+    );
+    const receipt = await tx.wait();
+
+    // TicketMinted 이벤트에서 tokenId 추출
+    let tokenId = null;
+    for (const log of receipt.logs) {
+      try {
+        const parsed = ticketNFT.interface.parseLog(log);
+        if (parsed.name === "TicketMinted") {
+          tokenId = Number(parsed.args.tokenId);
+          break;
+        }
+      } catch {}
+    }
+
+    // DB 확정
+    await db.query(
+      `UPDATE tickets SET token_id = $1, status = 'CONFIRMED', tx_hash = $2 WHERE id = $3`,
+      [tokenId, receipt.hash, ticketDbId]
+    );
+    await db.query(
+      "UPDATE seats SET status = 'SOLD' WHERE id = $1",
+      [seatId]
+    );
+
+    res.json({ ok: true, tokenId, txHash: receipt.hash });
   } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
     res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
   }
 });
 
 // GET /ticket/my — 내 티켓 목록
 router.get("/my", auth, async (req, res) => {
   try {
-    const { wallet } = req.user;
     const result = await db.query(
-      `SELECT t.*, e.name AS event_name, e.event_date, s.seat_number
+      `SELECT t.id, t.token_id, t.status, t.qr_version, t.created_at,
+              e.name AS event_name, e.venue, e.event_date, e.original_price,
+              s.seat_number
        FROM tickets t
-       JOIN users u ON t.owner_id = u.id
        JOIN events e ON t.event_id = e.id
        JOIN seats s ON t.seat_id = s.id
-       WHERE u.wallet = $1 AND t.status NOT IN ('CANCELLED')
+       WHERE t.owner_id = $1 AND t.status NOT IN ('CANCELLED')
        ORDER BY e.event_date ASC`,
-      [wallet]
+      [req.user.userId]
     );
     res.json(result.rows);
   } catch (err) {
@@ -103,14 +112,14 @@ router.get("/my", auth, async (req, res) => {
   }
 });
 
-// GET /ticket/qr/:tokenId — QR 데이터 생성 (ECDSA 서명 페이로드)
+// GET /ticket/qr/:tokenId — QR 데이터 생성 (유효 시간 1분)
 router.get("/qr/:tokenId", auth, async (req, res) => {
   try {
-    const { wallet } = req.user;
     const tokenId = parseInt(req.params.tokenId);
 
     const ticketResult = await db.query(
-      `SELECT t.*, u.wallet FROM tickets t JOIN users u ON t.owner_id = u.id
+      `SELECT t.*, u.wallet_address FROM tickets t
+       JOIN users u ON t.owner_id = u.id
        WHERE t.token_id = $1 AND t.status = 'CONFIRMED'`,
       [tokenId]
     );
@@ -119,12 +128,12 @@ router.get("/qr/:tokenId", auth, async (req, res) => {
     }
     const ticket = ticketResult.rows[0];
 
-    if (ticket.wallet.toLowerCase() !== wallet.toLowerCase()) {
+    if (ticket.owner_id !== req.user.userId) {
       return res.status(403).json({ error: "본인 티켓만 QR 조회 가능" });
     }
 
     const timestamp = Math.floor(Date.now() / 1000);
-    const payload = `${tokenId}:${wallet}:${ticket.qr_version}:${timestamp}`;
+    const payload = `${tokenId}:${ticket.owner_id}:${ticket.qr_version}:${timestamp}`;
     const signature = crypto
       .createHmac("sha256", process.env.JWT_SECRET)
       .update(payload)
@@ -132,10 +141,9 @@ router.get("/qr/:tokenId", auth, async (req, res) => {
 
     res.json({
       tokenId,
-      wallet,
       qrVersion: ticket.qr_version,
       timestamp,
-      signature,
+      expiresIn: 60,
       qrData: `${payload}:${signature}`,
     });
   } catch (err) {
@@ -143,8 +151,8 @@ router.get("/qr/:tokenId", auth, async (req, res) => {
   }
 });
 
-// POST /ticket/enter — QR 검증 + 입장 처리 + burn (관리자/게이트용)
-router.post("/enter", async (req, res) => {
+// POST /ticket/enter — QR 검증 + 입장 처리 (ADMIN 전용)
+router.post("/enter", admin, async (req, res) => {
   try {
     const { qrData } = req.body;
     if (!qrData) return res.status(400).json({ error: "qrData 필수" });
@@ -152,57 +160,92 @@ router.post("/enter", async (req, res) => {
     const parts = qrData.split(":");
     if (parts.length !== 5) return res.status(400).json({ error: "QR 형식 오류" });
 
-    const [tokenId, wallet, qrVersion, timestamp, signature] = parts;
+    const [tokenId, userId, qrVersion, timestamp, signature] = parts;
 
-    // 5분 만료 검증
+    // 1분 만료 검증
     const now = Math.floor(Date.now() / 1000);
-    if (now - parseInt(timestamp) > 300) {
-      return res.status(401).json({ error: "QR 코드가 만료됐습니다 (5분)" });
+    if (now - parseInt(timestamp) > 60) {
+      return res.status(401).json({ error: "QR 코드가 만료되었습니다 (1분)" });
     }
 
     // 서명 검증
-    const payload = `${tokenId}:${wallet}:${qrVersion}:${timestamp}`;
+    const payload = `${tokenId}:${userId}:${qrVersion}:${timestamp}`;
     const expected = crypto
       .createHmac("sha256", process.env.JWT_SECRET)
       .update(payload)
       .digest("hex");
-
     if (signature !== expected) {
       return res.status(401).json({ error: "QR 서명이 유효하지 않습니다" });
     }
 
     // DB 티켓 확인
     const ticketResult = await db.query(
-      `SELECT t.*, u.wallet FROM tickets t JOIN users u ON t.owner_id = u.id
+      `SELECT t.*, e.name AS event_name, s.seat_number, u.nickname
+       FROM tickets t
+       JOIN events e ON t.event_id = e.id
+       JOIN seats s ON t.seat_id = s.id
+       JOIN users u ON t.owner_id = u.id
        WHERE t.token_id = $1 AND t.status = 'CONFIRMED'`,
       [parseInt(tokenId)]
     );
     if (ticketResult.rows.length === 0) {
-      return res.status(404).json({ error: "유효한 티켓 없음" });
+      return res.status(404).json({ error: "유효한 티켓 없음 (이미 사용됐거나 존재하지 않음)" });
     }
     const ticket = ticketResult.rows[0];
 
-    if (ticket.wallet.toLowerCase() !== wallet.toLowerCase()) {
-      return res.status(401).json({ error: "지갑 불일치" });
+    if (ticket.owner_id !== userId) {
+      return res.status(401).json({ error: "소유자 불일치" });
     }
-
     if (parseInt(qrVersion) !== ticket.qr_version) {
       return res.status(401).json({ error: "이미 사용된 QR 코드입니다" });
     }
 
-    // DB 입장 처리 (qr_version 증가로 재사용 방지)
+    // 입장 처리
     await db.query(
       `UPDATE tickets SET status = 'USED', entered_at = NOW(), qr_version = qr_version + 1
        WHERE id = $1`,
       [ticket.id]
     );
+    await db.query("UPDATE seats SET status = 'USED' WHERE id = $1", [ticket.seat_id]);
 
-    // 온체인 burn (비동기)
+    // NFT 소각 (비동기)
     ticketNFT.burn(parseInt(tokenId)).catch((err) =>
       console.error("[burn 실패]", err.message)
     );
 
-    res.json({ ok: true, message: "입장 처리 완료" });
+    res.json({
+      ok: true,
+      nickname: ticket.nickname,
+      eventName: ticket.event_name,
+      seatNumber: ticket.seat_number,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /ticket/cancel/:ticketId — 티켓 취소 (공연 전)
+router.post("/cancel/:ticketId", auth, async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+
+    const ticketResult = await db.query(
+      "SELECT * FROM tickets WHERE id = $1 AND owner_id = $2 AND status = 'CONFIRMED'",
+      [ticketId, req.user.userId]
+    );
+    if (ticketResult.rows.length === 0) {
+      return res.status(404).json({ error: "취소 가능한 티켓이 없습니다" });
+    }
+    const ticket = ticketResult.rows[0];
+
+    // NFT 소각
+    await ticketNFT.burn(ticket.token_id);
+
+    // DB 처리
+    await db.query("UPDATE tickets SET status = 'CANCELLED' WHERE id = $1", [ticketId]);
+    await db.query("UPDATE seats SET status = 'AVAILABLE', reserved_at = NULL WHERE id = $1", [ticket.seat_id]);
+
+    res.json({ ok: true, message: "티켓이 취소되었습니다 (환불은 별도 처리)" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
