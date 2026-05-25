@@ -2,27 +2,46 @@ import pkg from "hardhat";
 const { ethers } = pkg;
 
 async function main() {
-  const currentTimestampInSeconds = Math.round(Date.now() / 1000);
-  const unlockTime = currentTimestampInSeconds + 60; // Unlock in 1 minute
+  console.log("=========================================");
+  console.log("🚀 NFT 티켓 시스템 스마트 컨트랙트 배포 시작...");
+  console.log("=========================================");
 
-  const lockedAmount = ethers.parseEther("0.001");
+  // 1. IdentityRegistry 배포
+  console.log("\n1. IdentityRegistry 배포 중...");
+  const IdentityRegistry = await ethers.getContractFactory("IdentityRegistry");
+  const identityRegistry = await IdentityRegistry.deploy();
+  await identityRegistry.waitForDeployment();
+  const identityRegistryAddress = await identityRegistry.getAddress();
+  console.log(`✅ IdentityRegistry 배포 완료: ${identityRegistryAddress}`);
 
-  const lock = await ethers.deployContract("Lock", [unlockTime], {
-    value: lockedAmount,
-  });
+  // 2. TicketNFT 배포 (IdentityRegistry 주소 주입)
+  console.log("\n2. TicketNFT 배포 중...");
+  const TicketNFT = await ethers.getContractFactory("TicketNFT");
+  const ticketNFT = await TicketNFT.deploy(identityRegistryAddress);
+  await ticketNFT.waitForDeployment();
+  const ticketNFTAddress = await ticketNFT.getAddress();
+  console.log(`✅ TicketNFT 배포 완료: ${ticketNFTAddress}`);
 
-  await lock.waitForDeployment();
+  // 3. TicketMarket 배포 (TicketNFT 주소 주입)
+  console.log("\n3. TicketMarket 배포 중...");
+  const TicketMarket = await ethers.getContractFactory("TicketMarket");
+  const ticketMarket = await TicketMarket.deploy(ticketNFTAddress);
+  await ticketMarket.waitForDeployment();
+  const ticketMarketAddress = await ticketMarket.getAddress();
+  console.log(`✅ TicketMarket 배포 완료: ${ticketMarketAddress}`);
 
-  console.log(
-    `Lock with ${ethers.formatEther(
-      lockedAmount
-    )} ETH and unlock timestamp ${unlockTime} deployed to ${lock.target}`
-  );
+  console.log("\n=========================================");
+  console.log("🎉 모든 스마트 컨트랙트 배포 성공!");
+  console.log("=========================================");
+  console.log("\n👇 백엔드 및 프론트엔드 .env 파일에 아래 값을 복사하여 붙여넣으세요:");
+  console.log(`IDENTITY_REGISTRY_ADDRESS=${identityRegistryAddress}`);
+  console.log(`TICKET_NFT_ADDRESS=${ticketNFTAddress}`);
+  console.log(`TICKET_MARKET_ADDRESS=${ticketMarketAddress}`);
+  console.log("=========================================");
 }
 
-// We recommend this pattern to be able to use async/await everywhere
-// and properly handle errors.
 main().catch((error) => {
+  console.error("\n❌ 배포 중 오류 발생:");
   console.error(error);
   process.exitCode = 1;
 });
