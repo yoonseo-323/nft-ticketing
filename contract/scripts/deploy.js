@@ -22,10 +22,10 @@ async function main() {
   const ticketNFTAddress = await ticketNFT.getAddress();
   console.log(`✅ TicketNFT 배포 완료: ${ticketNFTAddress}`);
 
-  // 3. TicketMarket 배포 (TicketNFT 주소 주입)
+  // 3. TicketMarket 배포 (생성자 인자 없음)
   console.log("\n3. TicketMarket 배포 중...");
   const TicketMarket = await ethers.getContractFactory("TicketMarket");
-  const ticketMarket = await TicketMarket.deploy(ticketNFTAddress);
+  const ticketMarket = await TicketMarket.deploy();
   await ticketMarket.waitForDeployment();
   const ticketMarketAddress = await ticketMarket.getAddress();
   console.log(`✅ TicketMarket 배포 완료: ${ticketMarketAddress}`);
