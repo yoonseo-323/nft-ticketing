@@ -22,8 +22,24 @@ async function main() {
   const ticketNFTAddress = await ticketNFT.getAddress();
   console.log(`✅ TicketNFT 배포 완료: ${ticketNFTAddress}`);
 
-  // 3. TicketMarket 배포 (생성자 인자 없음)
-  console.log("\n3. TicketMarket 배포 중...");
+  // 3. FanNFT 배포 (기본 baseURI 주입)
+  console.log("\n3. FanNFT 배포 중...");
+  const FanNFT = await ethers.getContractFactory("FanNFT");
+  const fanNFT = await FanNFT.deploy("http://localhost:3000/fan-nft/metadata/");
+  await fanNFT.waitForDeployment();
+  const fanNFTAddress = await fanNFT.getAddress();
+  console.log(`✅ FanNFT 배포 완료: ${fanNFTAddress}`);
+
+  // 4. TicketNFT와 FanNFT 상호 연결 설정
+  console.log("\n4. TicketNFT와 FanNFT 상호 연결 설정 중...");
+  const setFanNFTTx = await ticketNFT.setFanNFT(fanNFTAddress);
+  await setFanNFTTx.wait();
+  const setTicketNFTTx = await fanNFT.setTicketNFT(ticketNFTAddress);
+  await setTicketNFTTx.wait();
+  console.log("✅ TicketNFT - FanNFT 주소 연동 성공");
+
+  // 5. TicketMarket 배포 (생성자 인자 없음)
+  console.log("\n5. TicketMarket 배포 중...");
   const TicketMarket = await ethers.getContractFactory("TicketMarket");
   const ticketMarket = await TicketMarket.deploy();
   await ticketMarket.waitForDeployment();
@@ -36,6 +52,7 @@ async function main() {
   console.log("\n👇 백엔드 및 프론트엔드 .env 파일에 아래 값을 복사하여 붙여넣으세요:");
   console.log(`IDENTITY_REGISTRY_ADDRESS=${identityRegistryAddress}`);
   console.log(`TICKET_NFT_ADDRESS=${ticketNFTAddress}`);
+  console.log(`FAN_NFT_ADDRESS=${fanNFTAddress}`);
   console.log(`TICKET_MARKET_ADDRESS=${ticketMarketAddress}`);
   console.log("=========================================");
 }
