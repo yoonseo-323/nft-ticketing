@@ -16,6 +16,10 @@ interface IIdentityRegistry {
     function isVerified(address wallet) external view returns (bool);
 }
 
+interface IFanNFT {
+    function recordAttendance(address fan) external;
+}
+
 /**
  * @title TicketNFT
  * @dev 공연 티켓을 NFT로 발행, 소유 및 소각하는 기능을 제공하는 ERC721 컨트랙트
@@ -32,6 +36,9 @@ contract TicketNFT is ERC721, Ownable {
     
     // 각 Token ID별 원래 정가(Wei 또는 원화 등의 정가 값)를 저장하는 매핑
     mapping(uint256 => uint256) public ticketPrices;
+
+    // FanNFT 컨트랙트 주소
+    address public fanNFT;
 
     // 티켓 신규 발행 시 방출되는 커스텀 이벤트 (백엔드 인덱싱 및 프론트 연동 최적화)
     event TicketMinted(uint256 indexed tokenId, address indexed to, string seatInfo, uint256 originalPrice);
@@ -53,6 +60,14 @@ contract TicketNFT is ERC721, Ownable {
      */
     function setIdentityRegistry(address _identityRegistry) external onlyOwner {
         identityRegistry = IIdentityRegistry(_identityRegistry);
+    }
+
+    /**
+     * @dev FanNFT 컨트랙트 주소 설정 (Owner 전용)
+     * @param _fanNFT FanNFT 주소
+     */
+    function setFanNFT(address _fanNFT) external onlyOwner {
+        fanNFT = _fanNFT;
     }
 
     /**
@@ -103,9 +118,14 @@ contract TicketNFT is ERC721, Ownable {
      * @param tokenId 소각할 티켓의 Token ID
      */
     function burn(uint256 tokenId) external onlyOwner {
+        address ticketOwner = ownerOf(tokenId);
         delete ticketSeats[tokenId];
         delete ticketPrices[tokenId];
         _burn(tokenId);
         emit TicketBurned(tokenId);
+
+        if (fanNFT != address(0)) {
+            IFanNFT(fanNFT).recordAttendance(ticketOwner);
+        }
     }
 }
