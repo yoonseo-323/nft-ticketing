@@ -135,3 +135,51 @@ ERC-721 표준 기반의 공연 티켓 NFT 계약입니다. 티켓의 신규 발
 - event TicketListed(uint256 indexed tokenId, address indexed seller, uint256 price): 마켓 신규 상품 등록 시 발생
 - event TicketBought(uint256 indexed tokenId, address indexed buyer, uint256 price): 구매 성공 및 정산 완료 시 발생
 - event TicketCanceled(uint256 indexed tokenId, address indexed seller): 등록된 상품 취소 시 발생
+
+---
+
+## 4. FanNFT (관람 횟수 및 뱃지 등급 관리)
+사용자의 누적 관람 횟수를 기록하고 뱃지 등급을 자동 산정하여 관리하는 ERC-721 기반의 전송 불가 SBT(Soulbound Token) 컨트랙트입니다.
+
+### 상태 변경 함수 (Write Functions)
+
+#### recordAttendance(address fan)
+- 설명: 특정 사용자의 관람 횟수를 1회 증가시키고, 누적된 횟수를 바탕으로 등급 상승 여부를 자동 판별합니다. 만약 사용자가 FanNFT를 소유하고 있지 않은 경우(최초 1회 관람 시) 토큰을 신규 발행(Mint)하여 사용자 지갑으로 전송합니다.
+- 보안 필터: SBT 전송이 제한되도록 `_update` 함수를 오버라이드하여 민팅(Mint) 및 소각(Burn)을 제외한 모든 사용자 간 전송(Transfer) 시도가 강제로 거절(Revert)됩니다.
+- 호출 권한: TicketNFT 컨트랙트 전용 (TicketNFT.burn 실행 시 자동 호출됨)
+- 매개변수:
+  - fan (address): 관람 횟수를 기록할 사용자의 지갑 주소
+
+#### setTicketNFT(address _ticketNFT)
+- 설명: recordAttendance를 호출할 수 있는 TicketNFT 컨트랙트의 주소를 지정합니다.
+- 호출 권한: 컨트랙트 소유자(Owner) 전용
+- 매개변수:
+  - _ticketNFT (address): TicketNFT 컨트랙트 주소
+
+#### setBaseURI(string _newBaseURI)
+- 설명: FanNFT의 메타데이터 서버 base URI를 업데이트합니다.
+- 호출 권한: 컨트랙트 소유자(Owner) 전용
+- 매개변수:
+  - _newBaseURI (string): 변경할 base URI 문자열 (예: "http://localhost:3000/fan-nft/metadata/")
+
+### 조회 함수 (Read Functions - 가스비 무료)
+
+#### attendanceCount(address fan)
+- 설명: 특정 사용자의 누적 관람 횟수를 반환합니다.
+- 매개변수:
+  - fan (address): 조회할 사용자의 지갑 주소
+- 반환값: uint256 (누적 관람 횟수)
+
+#### userTokenId(address fan)
+- 설명: 특정 사용자의 FanNFT 토큰 ID를 반환합니다.
+- 매개변수:
+  - fan (address): 조회할 사용자의 지갑 주소
+- 반환값: uint256 (토큰 ID)
+
+#### tokenURI(uint256 tokenId)
+- 설명: 특정 FanNFT에 대한 고정된 메타데이터 URL을 반환합니다.
+- 반환값: string (예: "http://localhost:3000/fan-nft/metadata/{walletAddress}")
+
+### 이벤트 (Events)
+- event AttendanceRecorded(address indexed fan, uint256 indexed tokenId, uint256 attendanceCount): 관람 횟수 누적 및 FanNFT 발급 시 발생 (백엔드 캐싱용)
+- event TierUpgraded(address indexed fan, string newTier): 관람 횟수가 승급 조건(1, 3, 7, 15, 25)에 도달하여 등급이 상승했을 때 발생 (푸시 알림 연동용)
