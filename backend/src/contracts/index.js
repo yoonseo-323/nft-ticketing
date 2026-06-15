@@ -8,6 +8,7 @@ const artifactBase = path.join(__dirname, "../../../contract/artifacts/contracts
 const identityRegistryABI = require(`${artifactBase}/IdentityRegistry.sol/IdentityRegistry.json`).abi;
 const ticketNFTABI = require(`${artifactBase}/TicketNFT.sol/TicketNFT.json`).abi;
 const ticketMarketABI = require(`${artifactBase}/TicketMarket.sol/TicketMarket.json`).abi;
+const fanNFTABI = require(`${artifactBase}/FanNFT.sol/FanNFT.json`).abi;
 
 const identityRegistry = new ethers.Contract(
   process.env.IDENTITY_REGISTRY_ADDRESS,
@@ -27,4 +28,10 @@ const ticketMarket = new ethers.Contract(
   ownerWallet
 );
 
-module.exports = { identityRegistry, ticketNFT, ticketMarket };
+const fanNFT = new ethers.Contract(
+  process.env.FAN_NFT_ADDRESS,
+  fanNFTABI,
+  ownerWallet
+);
+
+module.exports = { identityRegistry, ticketNFT, ticketMarket, fanNFT };

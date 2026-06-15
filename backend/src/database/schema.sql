@@ -86,3 +86,12 @@ SELECT e.id, 'A' || s.n
 FROM events e, generate_series(1, 10) AS s(n)
 WHERE e.name = '아이유 단독 콘서트'
 ON CONFLICT DO NOTHING;
+
+-- FanNFT 뱃지 테이블
+CREATE TABLE IF NOT EXISTS fan_nft (
+  wallet_address    VARCHAR(42) PRIMARY KEY,
+  token_id          BIGINT NOT NULL,
+  attendance_count  INTEGER NOT NULL DEFAULT 0,
+  tier              VARCHAR(20) NOT NULL DEFAULT 'NONE',
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

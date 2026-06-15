@@ -15,6 +15,8 @@ app.use("/auth", require("./routes/auth"));
 app.use("/event", require("./routes/event"));
 app.use("/ticket", require("./routes/ticket"));
 app.use("/market", require("./routes/market"));
+app.use("/notify", require("./routes/notify"));
+app.use("/fan-nft", require("./routes/fanNft"));
 
 app.get("/", (req, res) => {
   res.json({ message: "NFT Ticketing API 정상 작동!" });
