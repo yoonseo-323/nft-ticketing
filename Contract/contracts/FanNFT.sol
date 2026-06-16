@@ -15,15 +15,22 @@ contract FanNFT is ERC721, Ownable {
     address public ticketNFT;
     string public baseURI;
 
-    // 지갑 주소별 누적 관람 횟수
-    mapping(address => uint256) public attendanceCount;
-    // 지갑 주소별 발행된 FanNFT 토큰 ID
-    mapping(address => uint256) public userTokenId;
+    // fan => artist => 관람횟수
+    mapping(address => mapping(address => uint256)) public attendanceCount;
+    // fan => artist => tokenId
+    mapping(address => mapping(address => uint256)) public userTokenId;
+    // fan => artist => 민팅 여부(balanceOf 대신 활용)
+    mapping(address => mapping(address => bool)) private _minted;
 
     enum Tier { NONE, BRONZE, SILVER, GOLD, PLATINUM, DIAMOND }
 
-    event AttendanceRecorded(address indexed fan, uint256 indexed tokenId, uint256 attendanceCount);
-    event TierUpgraded(address indexed fan, string newTier);
+    event AttendanceRecorded(
+        address indexed fan,
+        address indexed artist,
+        uint256 indexed tokenId,
+        uint256 attendanceCount
+    );
+    event TierUpgraded(address indexed fan, address indexed artist, string newTier);
 
     modifier onlyTicketNFT() {
         require(msg.sender == ticketNFT, "FanNFT: Only TicketNFT can call this");
@@ -64,27 +71,30 @@ contract FanNFT is ERC721, Ownable {
     /**
      * @dev 관람 횟수를 누적하고 등급 상승 시 이벤트 방출
      * @param fan 관람을 기록할 사용자의 지갑 주소
+     * artist 파라미터 추가
      */
-    function recordAttendance(address fan) external onlyTicketNFT {
+    function recordAttendance(address fan, address artist) external onlyTicketNFT {
         require(fan != address(0), "FanNFT: Invalid fan address");
+        require(artist != address(0), "FanNFT: Invalid artist address");
 
-        uint256 prevCount = attendanceCount[fan];
-        attendanceCount[fan] = prevCount + 1;
-        uint256 newCount = attendanceCount[fan];
+        uint256 prevCount = attendanceCount[fan][artist];
+        attendanceCount[fan][artist] = prevCount + 1;
+        uint256 newCount = attendanceCount[fan][artist];
 
-        if (balanceOf(fan) == 0) {
+        if (!_minted[fan][artist]) {
+            _minted[fan][artist] = true;
             uint256 tokenId = _nextTokenId++;
             _safeMint(fan, tokenId);
-            userTokenId[fan] = tokenId;
+            userTokenId[fan][artist] = tokenId;
         }
 
-        uint256 tid = userTokenId[fan];
-        emit AttendanceRecorded(fan, tid, newCount);
+        uint256 tid = userTokenId[fan][artist];
+        emit AttendanceRecorded(fan, artist, tid, newCount);
 
         Tier prevTier = _calcTier(prevCount);
         Tier newTier = _calcTier(newCount);
         if (prevTier != newTier) {
-            emit TierUpgraded(fan, _tierToString(newTier));
+            emit TierUpgraded(fan, artist, _tierToString(newTier));
         }
     }
 

@@ -17,7 +17,8 @@ interface IIdentityRegistry {
 }
 
 interface IFanNFT {
-    function recordAttendance(address fan) external;
+    // artist 파라미터 추가
+    function recordAttendance(address fan, address artist) external;
 }
 
 /**
@@ -36,6 +37,9 @@ contract TicketNFT is ERC721, Ownable {
     
     // 각 Token ID별 원래 정가(Wei 또는 원화 등의 정가 값)를 저장하는 매핑
     mapping(uint256 => uint256) public ticketPrices;
+
+    // 각 Token ID 별 어떤 아티스트 공연인지 아티스트 정보 매핑
+    mapping(uint256 => address) public ticketArtist;
 
     // FanNFT 컨트랙트 주소
     address public fanNFT;
@@ -89,11 +93,12 @@ contract TicketNFT is ERC721, Ownable {
      * @param originalPrice 티켓의 정가
      * @return uint256 발행된 티켓의 Token ID
      */
-    function mint(address to, string calldata seatInfo, uint256 originalPrice) external onlyOwner returns (uint256) {
+    function mint(address to, string calldata seatInfo, uint256 originalPrice, address artist) external onlyOwner returns (uint256) {
         // KYC 검증은 _safeMint 내부에서 트리거되는 _update 전송 훅에 의해 자동으로 수행됩니다.
         uint256 tokenId = _nextTokenId++;
         ticketSeats[tokenId] = seatInfo;
         ticketPrices[tokenId] = originalPrice;
+        ticketArtist[tokenId] = artist;
         
         _safeMint(to, tokenId);
         
@@ -119,13 +124,15 @@ contract TicketNFT is ERC721, Ownable {
      */
     function burn(uint256 tokenId) external onlyOwner {
         address ticketOwner = ownerOf(tokenId);
+        address artist = ticketArtist[tokenId];
         delete ticketSeats[tokenId];
         delete ticketPrices[tokenId];
+        delete ticketArtist[tokenId];
         _burn(tokenId);
         emit TicketBurned(tokenId);
 
         if (fanNFT != address(0)) {
-            IFanNFT(fanNFT).recordAttendance(ticketOwner);
+            IFanNFT(fanNFT).recordAttendance(ticketOwner, artist);
         }
     }
 }
