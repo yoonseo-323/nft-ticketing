@@ -6,7 +6,10 @@ const db = require("./models/db");
 const app = express();
 
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: [
+    'http://localhost:5173',
+    'https://greedy-grandpa-crabbing.ngrok-free.dev',
+  ],
   credentials: true,
 }));
 app.use(express.json());
