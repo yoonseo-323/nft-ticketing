@@ -130,7 +130,7 @@ router.put("/bank", authMiddleware, async (req, res) => {
       "UPDATE users SET bank_name = $1, bank_account = $2, bank_holder = $3 WHERE id = $4",
       [bank_name, bank_account, bank_holder, req.user.userId]
     );
-    res.json({ ok: true });
+    res.json({ ok: true, bank_name, bank_account, bank_holder });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
