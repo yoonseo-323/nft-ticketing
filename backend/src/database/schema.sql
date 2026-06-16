@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS events (
   original_price NUMERIC(12, 0) NOT NULL,
   total_seats    INT NOT NULL,
   organizer_id   UUID REFERENCES users(id),
+  artist_address VARCHAR(42),
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -67,10 +68,10 @@ VALUES ('admin@test.com', '$2a$10$X4kv7j5ZcG39WgogSl16BeSsHrTDv6QIJhW6Pt7Dp.c/US
 ON CONFLICT (email) DO NOTHING;
 
 -- 샘플 공연 데이터
-INSERT INTO events (name, venue, event_date, original_price, total_seats)
+INSERT INTO events (name, venue, event_date, original_price, total_seats, artist_address)
 VALUES
-  ('BTS World Tour 2026', 'KSPO DOME', '2026-07-10 19:00:00+09', 165000, 100),
-  ('아이유 단독 콘서트', '올림픽공원 체조경기장', '2026-08-15 20:00:00+09', 110000, 80)
+  ('BTS World Tour 2026', 'KSPO DOME', '2026-07-10 19:00:00+09', 165000, 100, NULL),
+  ('아이유 단독 콘서트', '올림픽공원 체조경기장', '2026-08-15 20:00:00+09', 110000, 80, NULL)
 ON CONFLICT DO NOTHING;
 
 -- 샘플 좌석 데이터 (BTS 공연 10석)
@@ -89,9 +90,11 @@ ON CONFLICT DO NOTHING;
 
 -- FanNFT 뱃지 테이블
 CREATE TABLE IF NOT EXISTS fan_nft (
-  wallet_address    VARCHAR(42) PRIMARY KEY,
+  wallet_address    VARCHAR(42),
+  artist_address    VARCHAR(42) NOT NULL,
   token_id          BIGINT NOT NULL,
   attendance_count  INTEGER NOT NULL DEFAULT 0,
   tier              VARCHAR(20) NOT NULL DEFAULT 'NONE',
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (wallet_address, artist_address)
 );

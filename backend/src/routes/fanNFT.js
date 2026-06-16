@@ -16,67 +16,92 @@ const TIER_META = {
   DIAMOND:  { name: "Diamond",   description: "25회 이상 공연을 관람한 다이아몬드 뱃지" },
 };
 
-// GET /fan-nft/me — 마이페이지용 (JWT 필요)
+// GET /fan-nft/me — 아티스트별 뱃지 목록 (JWT 필요)
 router.get("/me", authMiddleware, async (req, res) => {
   try {
-    const userId = req.user.userId;
     const userRes = await db.query(
-      "SELECT wallet_address FROM users WHERE id = $1", [userId]
+      "SELECT wallet_address FROM users WHERE id = $1",
+      [req.user.userId]
     );
     if (!userRes.rows.length) {
       return res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
     }
     const walletAddress = userRes.rows[0].wallet_address;
 
+    // 아티스트별 전체 뱃지 목록 조회
     const nftRes = await db.query(
-      "SELECT token_id, attendance_count, tier FROM fan_nft WHERE LOWER(wallet_address) = LOWER($1)",
+      `SELECT artist_address, token_id, attendance_count, tier
+       FROM fan_nft
+       WHERE LOWER(wallet_address) = LOWER($1)
+       ORDER BY attendance_count DESC`,
       [walletAddress]
     );
 
+    // 뱃지가 하나도 없는 경우
     if (!nftRes.rows.length) {
-      return res.json({ tier: "NONE", attendance_count: 0, token_id: null, next_tier_at: 1, remaining: 1 });
+      return res.json({ badges: [] });
     }
 
-    const { token_id, attendance_count, tier } = nftRes.rows[0];
-    const nextAt = NEXT_TIER_AT[tier] ?? null;
-
-    return res.json({
-      tier,
-      attendance_count,
-      token_id,
-      next_tier_at: nextAt,
-      remaining: nextAt ? nextAt - attendance_count : 0,
+    // 아티스트별 다음 등급 정보 계산
+    const badges = nftRes.rows.map((row) => {
+      const nextAt = NEXT_TIER_AT[row.tier] ?? null;
+      return {
+        artist_address:   row.artist_address,
+        token_id:         row.token_id,
+        attendance_count: row.attendance_count,
+        tier:             row.tier,
+        next_tier_at:     nextAt,
+        remaining:        nextAt ? nextAt - row.attendance_count : 0,
+      };
     });
+
+    res.json({ badges });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /fan-nft/metadata/:address — tokenURI가 가리키는 메타데이터 (인증 불필요)
+// GET /fan-nft/metadata/:address — tokenURI 메타데이터 (인증 불필요)
 router.get("/metadata/:address", async (req, res) => {
   try {
     const address = req.params.address;
+
+    // 해당 지갑의 모든 아티스트 뱃지 조회
     const nftRes = await db.query(
-      "SELECT attendance_count, tier FROM fan_nft WHERE LOWER(wallet_address) = LOWER($1)",
+      `SELECT artist_address, attendance_count, tier
+       FROM fan_nft
+       WHERE LOWER(wallet_address) = LOWER($1)`,
       [address]
     );
 
-    const tier = nftRes.rows[0]?.tier ?? "NONE";
-    const count = nftRes.rows[0]?.attendance_count ?? 0;
-    const meta = TIER_META[tier] ?? TIER_META["NONE"];
+    if (!nftRes.rows.length) {
+      return res.json({
+        name: "No Badge",
+        description: "공연 관람 기록이 없습니다.",
+        attributes: [],
+      });
+    }
 
     const host = req.headers.host || "localhost:3000";
     const protocol = req.secure ? "https" : "http";
 
-    res.json({
-      name: meta.name,
-      description: meta.description,
-      image: `${protocol}://${host}/images/badge_${tier.toLowerCase()}.png`,
-      attributes: [
-        { trait_type: "Tier", value: tier },
-        { trait_type: "Attendance Count", value: count },
-      ],
+    // 아티스트별 메타데이터 배열로 반환
+    const metadata = nftRes.rows.map((row) => {
+      const meta = TIER_META[row.tier] ?? TIER_META["NONE"];
+      return {
+        artist_address: row.artist_address,
+        name:           meta.name,
+        description:    meta.description,
+        image:          `${protocol}://${host}/images/badge_${row.tier.toLowerCase()}.png`,
+        attributes: [
+          { trait_type: "Tier",             value: row.tier },
+          { trait_type: "Attendance Count", value: row.attendance_count },
+          { trait_type: "Artist",           value: row.artist_address },
+        ],
+      };
     });
+
+    res.json({ metadata });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

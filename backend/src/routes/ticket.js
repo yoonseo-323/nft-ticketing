@@ -54,11 +54,22 @@ router.post("/purchase", auth, async (req, res) => {
     );
     const walletAddress = userResult.rows[0].wallet_address;
 
+    //공연 정보에서 artist_address 가져오기
+    const eventResult = await db.query(
+      "SELECT artist_address FROM events WHERE id = $1",
+      [eventId]
+    );
+    const artistAddress = eventResult.rows[0]?.artist_address;
+    if (!artistAddress){
+      return res.status(400).json({error: "공연에 아티스트 주소가 설정되지 않았습니다"});
+    }
+    
     // 온체인 mint (mock 결제 완료로 간주)
     const tx = await ticketNFT.mint(
       walletAddress,
       seat.seat_number,
-      BigInt(seat.original_price)
+      BigInt(seat.original_price),
+      artistAddress
     );
     const receipt = await tx.wait();
 

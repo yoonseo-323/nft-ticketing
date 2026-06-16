@@ -17,25 +17,26 @@ function startChainListener() {
   });
 
   // FanNFT 관람 횟수 기록 이벤트
-  fanNFT.on("AttendanceRecorded", async (fan, tokenId, attendanceCount) => {
+  fanNFT.on("AttendanceRecorded", async (fan, artist, tokenId, attendanceCount) => {
     const walletAddress = fan.toLowerCase();
+    const artistAddress = artist.toLowerCase();
     const tid = Number(tokenId);
     const count = Number(attendanceCount);
     const tier = getTier(count);
 
-    console.log(`[체인] AttendanceRecorded fan=${walletAddress} count=${count} tier=${tier}`);
+    console.log(`[체인] AttendanceRecorded fan=${walletAddress} artist=${artistAddress} count=${count} tier=${tier}`);
 
     try {
       await db.query(
-        `INSERT INTO fan_nft (wallet_address, token_id, attendance_count, tier, updated_at)
-         VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (wallet_address)
+        `INSERT INTO fan_nft (wallet_address, artist_address, token_id, attendance_count, tier, updated_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (wallet_address, artist_address)
          DO UPDATE SET
            token_id = EXCLUDED.token_id,
            attendance_count = EXCLUDED.attendance_count,
            tier = EXCLUDED.tier,
            updated_at = NOW()`,
-        [walletAddress, tid, count, tier]
+        [walletAddress, artistAddress, tid, count, tier]
       );
     } catch (err) {
       console.error("[체인 리스너] fan_nft DB 업데이트 실패:", err.message);
@@ -43,16 +44,17 @@ function startChainListener() {
   });
 
   // FanNFT 등급 상승 이벤트 → /notify 연동
-  fanNFT.on("TierUpgraded", async (fan, newTier) => {
+  fanNFT.on("TierUpgraded", async (fan, artist, newTier) => {
     const walletAddress = fan.toLowerCase();
-    console.log(`[체인] TierUpgraded fan=${walletAddress} newTier=${newTier}`);
+    const artistAddress = artist.toLowerCase();
+    console.log(`[체인] TierUpgraded fan=${walletAddress} artist=${artistAddress} newTier=${newTier}`);
 
     try {
       const port = process.env.PORT || 3000;
       await fetch(`http://localhost:${port}/notify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ walletAddress, tier: newTier }),
+        body: JSON.stringify({ walletAddress, artistAddress, tier: newTier }),
       });
     } catch (err) {
       console.error("[체인 리스너] notify 전송 실패:", err.message);
