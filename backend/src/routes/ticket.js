@@ -72,6 +72,8 @@ router.post("/purchase", auth, async (req, res) => {
       artistAddress
     );
     const receipt = await tx.wait();
+    // token_id null issue test용
+    // console.log("=== receipt.logs ===", JSON.stringify(receipt.logs, null, 2));
 
     // TicketMinted 이벤트에서 tokenId 추출
     let tokenId = null;
