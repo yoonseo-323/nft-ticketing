@@ -10,11 +10,14 @@ const { ownerWallet } = require("../config/chain");
 // POST /ticket/purchase — 좌석 선점 + mock 결제 + NFT 발행
 router.post("/purchase", auth, async (req, res) => {
   const client = await db.getClient();
+  let ticketDbId = null;
+  let targetSeatId = null;
   try {
     const { eventId, seatId } = req.body;
     if (!eventId || !seatId) {
       return res.status(400).json({ error: "eventId, seatId 필수" });
     }
+    targetSeatId = seatId;
 
     await client.query("BEGIN");
 
@@ -43,7 +46,7 @@ router.post("/purchase", auth, async (req, res) => {
        VALUES ($1, $2, $3, 'PENDING', 0) RETURNING id`,
       [req.user.userId, eventId, seatId]
     );
-    const ticketDbId = ticketResult.rows[0].id;
+    ticketDbId = ticketResult.rows[0].id;
 
     await client.query("COMMIT");
 
@@ -54,16 +57,26 @@ router.post("/purchase", auth, async (req, res) => {
     );
     const walletAddress = userResult.rows[0].wallet_address;
 
-    //공연 정보에서 artist_address 가져오기
+    // 공연 정보에서 artist_address 가져오기 (없으면 ZeroAddress 대입)
     const eventResult = await db.query(
       "SELECT artist_address FROM events WHERE id = $1",
       [eventId]
     );
-    const artistAddress = eventResult.rows[0]?.artist_address;
-    if (!artistAddress){
-      return res.status(400).json({error: "공연에 아티스트 주소가 설정되지 않았습니다"});
+    const artistAddress = eventResult.rows[0]?.artist_address || ethers.ZeroAddress;
+
+    // 온체인 KYC 자동 동기화 가드 (스마트 계약 초기화/재배포 대응)
+    try {
+      const isVerified = await identityRegistry.isVerified(walletAddress);
+      if (!isVerified) {
+        console.log(`[KYC Guard] Registering wallet ${walletAddress} on IdentityRegistry...`);
+        const regTx = await identityRegistry.register(walletAddress);
+        await regTx.wait();
+        console.log(`[KYC Guard] Wallet ${walletAddress} registered successfully.`);
+      }
+    } catch (kycErr) {
+      console.error("[KYC Guard] KYC auto-registration failed:", kycErr.message);
     }
-    
+
     // 온체인 mint (mock 결제 완료로 간주)
     const tx = await ticketNFT.mint(
       walletAddress,
@@ -72,8 +85,6 @@ router.post("/purchase", auth, async (req, res) => {
       artistAddress
     );
     const receipt = await tx.wait();
-    // token_id null issue test용
-    // console.log("=== receipt.logs ===", JSON.stringify(receipt.logs, null, 2));
 
     // TicketMinted 이벤트에서 tokenId 추출
     let tokenId = null;
@@ -100,6 +111,18 @@ router.post("/purchase", auth, async (req, res) => {
     res.json({ ok: true, tokenId, txHash: receipt.hash });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
+    
+    // 온체인 예외 발생 시 DB 즉시 복구 (롤백 가드)
+    if (targetSeatId && ticketDbId) {
+      try {
+        await db.query("UPDATE seats SET status = 'AVAILABLE', reserved_at = NULL WHERE id = $1", [targetSeatId]);
+        await db.query("UPDATE tickets SET status = 'CANCELLED' WHERE id = $1", [ticketDbId]);
+        console.log(`[Purchase Guard] Successfully recovered database state for failed purchase: seat ${targetSeatId}, ticket ${ticketDbId}`);
+      } catch (recoveryErr) {
+        console.error("[Purchase Guard] DB recovery failed:", recoveryErr.message);
+      }
+    }
+    
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
