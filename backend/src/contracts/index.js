@@ -10,28 +10,31 @@ const ticketNFTABI = require(`${artifactBase}/TicketNFT.sol/TicketNFT.json`).abi
 const ticketMarketABI = require(`${artifactBase}/TicketMarket.sol/TicketMarket.json`).abi;
 const fanNFTABI = require(`${artifactBase}/FanNFT.sol/FanNFT.json`).abi;
 
+// owner 지갑을 NonceManager로 감싸서 모든 컨트랙트가 nonce를 메모리에서 안전하게 공유
+const nonceManagedWallet = new ethers.NonceManager(ownerWallet);
+
 const identityRegistry = new ethers.Contract(
   process.env.IDENTITY_REGISTRY_ADDRESS,
   identityRegistryABI,
-  ownerWallet
+  nonceManagedWallet
 );
 
 const ticketNFT = new ethers.Contract(
   process.env.TICKET_NFT_ADDRESS,
   ticketNFTABI,
-  ownerWallet
+  nonceManagedWallet
 );
 
 const ticketMarket = new ethers.Contract(
   process.env.TICKET_MARKET_ADDRESS,
   ticketMarketABI,
-  ownerWallet
+  nonceManagedWallet
 );
 
 const fanNFT = new ethers.Contract(
   process.env.FAN_NFT_ADDRESS,
   fanNFTABI,
-  ownerWallet
+  nonceManagedWallet
 );
 
 module.exports = { identityRegistry, ticketNFT, ticketMarket, fanNFT };
