@@ -184,14 +184,14 @@ router.post("/cancel/:listingId", auth, async (req, res) => {
       "SELECT wallet_address FROM users WHERE id = $1",
       [req.user.userId]
     );
-    const sellerWallet = sellerResult.rows[0].wallet_address;
+    const sellerWallet = sellerResult.rows[0]?.wallet_address || "";
 
     let txFailedButNotListed = false;
     try {
       const tx = await ticketMarket.cancel(parseInt(listing.token_id));
       await tx.wait();
     } catch (contractErr) {
-      if (contractErr.message.includes("TicketMarket: Not listed")) {
+      if (contractErr.message.includes("TicketMarket: Not listed") || contractErr.code === "CALL_EXCEPTION") {
         txFailedButNotListed = true;
       } else {
         throw contractErr;

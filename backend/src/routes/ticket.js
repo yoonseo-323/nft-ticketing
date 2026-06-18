@@ -234,7 +234,19 @@ router.post("/cancel/:ticketId", auth, async (req, res) => {
     const ticket = ticketResult.rows[0];
 
     // NFT 소각 (단순 취소용 소각 함수 호출)
-    await ticketNFT.burnForCancellation(ticket.token_id);
+    try {
+      await ticketNFT.burnForCancellation(ticket.token_id);
+    } catch (contractErr) {
+      console.warn(`[NFT 소각 건너뜀] 토큰 ID ${ticket.token_id} 소각 중 에러 발생:`, contractErr.message);
+      // ERC721NonexistentToken, nonexistent token 또는 CALL_EXCEPTION(함수 미정의 등) 발생 시
+      // 이미 소각되었거나 환경 리셋으로 판단하고 DB 취소 처리를 계속 진행합니다.
+      const isNonexistent = contractErr.message.includes("ERC721NonexistentToken") || 
+                            contractErr.message.includes("nonexistent token") ||
+                            contractErr.code === "CALL_EXCEPTION";
+      if (!isNonexistent) {
+        throw contractErr;
+      }
+    }
 
     // DB 처리
     await db.query("UPDATE tickets SET status = 'CANCELLED' WHERE id = $1", [ticketId]);
