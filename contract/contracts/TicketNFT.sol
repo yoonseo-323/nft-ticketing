@@ -119,7 +119,7 @@ contract TicketNFT is ERC721, Ownable {
     }
 
     /**
-     * @dev 입장 확인(사용 완료) 및 예약 취소 시 티켓 NFT 소각 (Owner 전용)
+     * @dev 입장 확인(사용 완료) 시 티켓 NFT 소각 및 FanNFT 관람 기록 (Owner 전용)
      * @param tokenId 소각할 티켓의 Token ID
      */
     function burn(uint256 tokenId) external onlyOwner {
@@ -134,5 +134,17 @@ contract TicketNFT is ERC721, Ownable {
         if (fanNFT != address(0)) {
             IFanNFT(fanNFT).recordAttendance(ticketOwner, artist);
         }
+    }
+
+    /**
+     * @dev 단순 취소 시 티켓 NFT 소각 (FanNFT 관람 기록 없음, Owner 전용)
+     * @param tokenId 소각할 티켓의 Token ID
+     */
+    function burnForCancellation(uint256 tokenId) external onlyOwner {
+        delete ticketSeats[tokenId];
+        delete ticketPrices[tokenId];
+        delete ticketArtist[tokenId];
+        _burn(tokenId);
+        emit TicketBurned(tokenId);
     }
 }

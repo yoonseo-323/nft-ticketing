@@ -6,6 +6,7 @@ describe("NFT Ticket System Integration Tests", function () {
   let identityRegistry;
   let ticketNFT;
   let ticketMarket;
+  let fanNFT;
   let owner, seller, verifiedBuyer, unverifiedBuyer, artist;
 
   beforeEach(async function () {
@@ -22,7 +23,15 @@ describe("NFT Ticket System Integration Tests", function () {
     ticketNFT = await TicketNFTFactory.deploy(await identityRegistry.getAddress());
     await ticketNFT.waitForDeployment();
 
-    // 3. TicketMarket 배포
+    // 3. FanNFT 배포 및 상호 연결
+    const FanNFTFactory = await ethers.getContractFactory("FanNFT");
+    fanNFT = await FanNFTFactory.deploy("http://localhost:3000/fan-nft/metadata/");
+    await fanNFT.waitForDeployment();
+    
+    await (await ticketNFT.setFanNFT(await fanNFT.getAddress())).wait();
+    await (await fanNFT.setTicketNFT(await ticketNFT.getAddress())).wait();
+
+    // 4. TicketMarket 배포
     const TicketMarketFactory = await ethers.getContractFactory("TicketMarket");
     ticketMarket = await TicketMarketFactory.deploy();
     await ticketMarket.waitForDeployment();
@@ -147,39 +156,72 @@ describe("NFT Ticket System Integration Tests", function () {
     });
   });
 
-  describe("4. 티켓 소각(입장) 단계 검증", function () {
+  describe("4. 티켓 소각(입장) 및 취소 단계 검증", function () {
     const originalPrice = ethers.parseEther("0.1");
     const seatInfo = "A구역-1열-5번";
-    const tokenId = 0;
 
     beforeEach(async function () {
-      // seller 인증 후 티켓 발행
+      // seller 인증
       await identityRegistry.connect(owner).register(seller.address);
-      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, artist.address);
     });
 
     it("어드민(Owner)이 아닌 계정이 임의로 티켓을 소각하려고 하면 실패해야 함", async function () {
+      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, artist.address);
       await expect(
-        ticketNFT.connect(seller).burn(tokenId)
+        ticketNFT.connect(seller).burn(0)
       ).to.be.revertedWithCustomError(ticketNFT, "OwnableUnauthorizedAccount");
     });
 
-    it("어드민(Owner)이 티켓 소각 시 성공 및 매핑 데이터 초기화 검증", async function () {
+    it("어드민(Owner)이 티켓 소각(입장) 시 성공, 매핑 초기화 및 FanNFT 기록 검증", async function () {
+      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, artist.address);
+      
       // 티켓 소각 진행
-      await expect(ticketNFT.connect(owner).burn(tokenId))
+      await expect(ticketNFT.connect(owner).burn(0))
         .to.emit(ticketNFT, "TicketBurned")
-        .withArgs(tokenId);
+        .withArgs(0);
 
       // 온체인 저장소 메타데이터 초기화 검증
-      expect(await ticketNFT.ticketSeats(tokenId)).to.equal("");
-      expect(await ticketNFT.ticketPrices(tokenId)).to.equal(0n);
-      expect(await ticketNFT.ticketArtist(tokenId)).to.equal("0x0000000000000000000000000000000000000000");
+      expect(await ticketNFT.ticketSeats(0)).to.equal("");
+      expect(await ticketNFT.ticketPrices(0)).to.equal(0n);
+      expect(await ticketNFT.ticketArtist(0)).to.equal("0x0000000000000000000000000000000000000000");
       
       // 소각되어 존재하지 않는 토큰 소유권 확인 시 에러 검증
-      await expect(ticketNFT.ownerOf(tokenId)).to.be.revertedWithCustomError(
+      await expect(ticketNFT.ownerOf(0)).to.be.revertedWithCustomError(
         ticketNFT,
         "ERC721NonexistentToken"
       );
+
+      // FanNFT 관람 횟수 증가 확인 (1회)
+      expect(await fanNFT.attendanceCount(seller.address, artist.address)).to.equal(1n);
+    });
+
+    it("예약 취소(burnForCancellation) 시 FanNFT 관람 기록이 올라가지 않고 성공함", async function () {
+      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, artist.address);
+
+      // 취소 소각 진행
+      await expect(ticketNFT.connect(owner).burnForCancellation(0))
+        .to.emit(ticketNFT, "TicketBurned")
+        .withArgs(0);
+
+      // 온체인 저장소 메타데이터 초기화 검증
+      expect(await ticketNFT.ticketSeats(0)).to.equal("");
+      expect(await ticketNFT.ticketPrices(0)).to.equal(0n);
+      expect(await ticketNFT.ticketArtist(0)).to.equal("0x0000000000000000000000000000000000000000");
+
+      // FanNFT 관람 횟수 변동 없음 (0회)
+      expect(await fanNFT.attendanceCount(seller.address, artist.address)).to.equal(0n);
+    });
+
+    it("아티스트 주소가 address(0)인 경우에도 burnForCancellation은 정상 소각되어야 함", async function () {
+      // 아티스트가 address(0)인 티켓 발행
+      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, ethers.ZeroAddress);
+
+      // burnForCancellation 호출 (성공해야 함)
+      await expect(ticketNFT.connect(owner).burnForCancellation(0))
+        .to.emit(ticketNFT, "TicketBurned")
+        .withArgs(0);
+        
+      expect(await ticketNFT.ticketSeats(0)).to.equal("");
     });
   });
 });
