@@ -233,8 +233,8 @@ router.post("/cancel/:ticketId", auth, async (req, res) => {
     }
     const ticket = ticketResult.rows[0];
 
-    // NFT 소각
-    await ticketNFT.burn(ticket.token_id);
+    // NFT 소각 (단순 취소용 소각 함수 호출)
+    await ticketNFT.burnForCancellation(ticket.token_id);
 
     // DB 처리
     await db.query("UPDATE tickets SET status = 'CANCELLED' WHERE id = $1", [ticketId]);

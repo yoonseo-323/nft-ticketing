@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const db = require("../models/db");
 const auth = require("../middlewares/auth");
-const { ticketNFT, ticketMarket } = require("../contracts");
+const { identityRegistry, ticketNFT, ticketMarket } = require("../contracts");
 
 // GET /market — 판매 중인 티켓 목록
 router.get("/", async (req, res) => {
@@ -128,6 +128,12 @@ router.post("/buy/:listingId", auth, async (req, res) => {
     );
     const buyerWallet = buyerResult.rows[0].wallet_address;
 
+    // 구매자 KYC 인증 사전 검증
+    const isVerified = await identityRegistry.isVerified(buyerWallet);
+    if (!isVerified) {
+      return res.status(400).json({ error: "구매자가 KYC 인증이 완료되지 않았습니다. 먼저 본인인증을 해주세요." });
+    }
+
     // 온체인 리스팅 완료 처리
     const saleTx = await ticketMarket.completeSale(parseInt(listing.token_id), buyerWallet);
     await saleTx.wait();
@@ -173,15 +179,70 @@ router.post("/cancel/:listingId", auth, async (req, res) => {
     }
     const listing = listingResult.rows[0];
 
-    const tx = await ticketMarket.cancel(parseInt(listing.token_id));
-    await tx.wait();
-
-    await db.query(
-      "UPDATE market_listings SET status = 'CANCELLED' WHERE id = $1",
-      [listingId]
+    // 판매자 지갑 주소 조회 (온체인 소유권 비교용)
+    const sellerResult = await db.query(
+      "SELECT wallet_address FROM users WHERE id = $1",
+      [req.user.userId]
     );
+    const sellerWallet = sellerResult.rows[0].wallet_address;
 
-    res.json({ ok: true });
+    let txFailedButNotListed = false;
+    try {
+      const tx = await ticketMarket.cancel(parseInt(listing.token_id));
+      await tx.wait();
+    } catch (contractErr) {
+      if (contractErr.message.includes("TicketMarket: Not listed")) {
+        txFailedButNotListed = true;
+      } else {
+        throw contractErr;
+      }
+    }
+
+    if (txFailedButNotListed) {
+      // 온체인의 실제 소유자 확인 (데이터 불일치 복구 플로우)
+      let currentOwnerWallet = null;
+      try {
+        currentOwnerWallet = await ticketNFT.ownerOf(parseInt(listing.token_id));
+      } catch (ownerErr) {
+        // 이미 소각되었거나 토큰이 존재하지 않는 경우 (예외 처리)
+        currentOwnerWallet = null;
+      }
+
+      if (!currentOwnerWallet || currentOwnerWallet.toLowerCase() === sellerWallet.toLowerCase()) {
+        // 소유자가 판매자 본인이거나 이미 토큰이 사라진 경우 -> 취소 처리 완료로 동기화
+        await db.query(
+          "UPDATE market_listings SET status = 'CANCELLED' WHERE id = $1",
+          [listingId]
+        );
+        return res.json({ ok: true, message: "이미 온체인에서 리스팅이 취소된 상태이므로 DB 상태를 CANCELLED로 동기화했습니다." });
+      } else {
+        // 소유자가 타인(구매자)인 경우 -> 이미 양도가 완료된 상태이므로 SOLD 처리로 동기화
+        const buyerResult = await db.query(
+          "SELECT id FROM users WHERE LOWER(wallet_address) = $1",
+          [currentOwnerWallet.toLowerCase()]
+        );
+        if (buyerResult.rows.length > 0) {
+          const buyerId = buyerResult.rows[0].id;
+          await db.query(
+            "UPDATE tickets SET owner_id = $1, qr_version = qr_version + 1 WHERE id = $2",
+            [buyerId, listing.ticket_id]
+          );
+          await db.query(
+            "UPDATE market_listings SET status = 'SOLD' WHERE id = $1",
+            [listingId]
+          );
+          return res.status(200).json({ ok: true, message: "이미 온체인에서 양도 완료된 티켓이므로 DB 상태를 SOLD로 동기화했습니다." });
+        } else {
+          return res.status(500).json({ error: "온체인의 티켓 소유 지갑 주소가 등록된 회원 정보에 없습니다." });
+        }
+      }
+    } else {
+      await db.query(
+        "UPDATE market_listings SET status = 'CANCELLED' WHERE id = $1",
+        [listingId]
+      );
+      res.json({ ok: true });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
