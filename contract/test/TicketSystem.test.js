@@ -6,11 +6,11 @@ describe("NFT Ticket System Integration Tests", function () {
   let identityRegistry;
   let ticketNFT;
   let ticketMarket;
-  let owner, seller, verifiedBuyer, unverifiedBuyer;
+  let owner, seller, verifiedBuyer, unverifiedBuyer, artist;
 
   beforeEach(async function () {
     // 테스트용 지갑 계정 획득
-    [owner, seller, verifiedBuyer, unverifiedBuyer] = await ethers.getSigners();
+    [owner, seller, verifiedBuyer, unverifiedBuyer, artist] = await ethers.getSigners();
 
     // 1. IdentityRegistry 배포
     const IdentityRegistryFactory = await ethers.getContractFactory("IdentityRegistry");
@@ -35,7 +35,7 @@ describe("NFT Ticket System Integration Tests", function () {
 
       // seller 지갑이 KYC 미인증 상태이므로 발행 트랜잭션이 실패해야 함
       await expect(
-        ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice)
+        ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, artist.address)
       ).to.be.revertedWith("TicketNFT: Recipient is not KYC verified");
     });
 
@@ -49,7 +49,7 @@ describe("NFT Ticket System Integration Tests", function () {
         .withArgs(seller.address);
 
       // 2. 티켓 발행 시도 (성공 및 TicketMinted 이벤트 방출 검증)
-      await expect(ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice))
+      await expect(ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, artist.address))
         .to.emit(ticketNFT, "TicketMinted")
         .withArgs(0, seller.address, seatInfo, originalPrice);
 
@@ -57,6 +57,7 @@ describe("NFT Ticket System Integration Tests", function () {
       expect(await ticketNFT.ownerOf(0)).to.equal(seller.address);
       expect(await ticketNFT.ticketSeats(0)).to.equal(seatInfo);
       expect(await ticketNFT.ticketPrices(0)).to.equal(originalPrice);
+      expect(await ticketNFT.ticketArtist(0)).to.equal(artist.address);
     });
   });
 
@@ -68,7 +69,7 @@ describe("NFT Ticket System Integration Tests", function () {
     beforeEach(async function () {
       // seller 인증 후 티켓 발행
       await identityRegistry.connect(owner).register(seller.address);
-      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice);
+      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, artist.address);
     });
 
     it("정가의 130%를 초과하는 판매 가격 책정 시 등록 실패해야 함", async function () {
@@ -112,7 +113,7 @@ describe("NFT Ticket System Integration Tests", function () {
     beforeEach(async function () {
       // 1. 판매자 인증 및 티켓 발행
       await identityRegistry.connect(owner).register(seller.address);
-      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice);
+      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, artist.address);
 
       // 2. 마켓 등록
       await ticketMarket.connect(owner).list(tokenId, salePrice, originalPrice, seller.address);
@@ -154,7 +155,7 @@ describe("NFT Ticket System Integration Tests", function () {
     beforeEach(async function () {
       // seller 인증 후 티켓 발행
       await identityRegistry.connect(owner).register(seller.address);
-      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice);
+      await ticketNFT.connect(owner).mint(seller.address, seatInfo, originalPrice, artist.address);
     });
 
     it("어드민(Owner)이 아닌 계정이 임의로 티켓을 소각하려고 하면 실패해야 함", async function () {
@@ -172,6 +173,7 @@ describe("NFT Ticket System Integration Tests", function () {
       // 온체인 저장소 메타데이터 초기화 검증
       expect(await ticketNFT.ticketSeats(tokenId)).to.equal("");
       expect(await ticketNFT.ticketPrices(tokenId)).to.equal(0n);
+      expect(await ticketNFT.ticketArtist(tokenId)).to.equal("0x0000000000000000000000000000000000000000");
       
       // 소각되어 존재하지 않는 토큰 소유권 확인 시 에러 검증
       await expect(ticketNFT.ownerOf(tokenId)).to.be.revertedWithCustomError(
