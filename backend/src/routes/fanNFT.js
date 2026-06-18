@@ -30,7 +30,7 @@ router.get("/me", authMiddleware, async (req, res) => {
 
     // 아티스트별 전체 뱃지 목록 조회
     const nftRes = await db.query(
-      `SELECT artist_address, token_id, attendance_count, tier
+      `SELECT artist_address, artist_name, token_id, attendance_count, tier
        FROM fan_nft
        WHERE LOWER(wallet_address) = LOWER($1)
        ORDER BY attendance_count DESC`,
@@ -47,6 +47,7 @@ router.get("/me", authMiddleware, async (req, res) => {
       const nextAt = NEXT_TIER_AT[row.tier] ?? null;
       return {
         artist_address:   row.artist_address,
+        artist_name:      row.artist_name,
         token_id:         row.token_id,
         attendance_count: row.attendance_count,
         tier:             row.tier,
