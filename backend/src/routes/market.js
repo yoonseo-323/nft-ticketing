@@ -134,9 +134,75 @@ router.post("/buy/:listingId", auth, async (req, res) => {
       return res.status(400).json({ error: "구매자가 KYC 인증이 완료되지 않았습니다. 먼저 본인인증을 해주세요." });
     }
 
-    // 온체인 리스팅 완료 처리
-    const saleTx = await ticketMarket.completeSale(parseInt(listing.token_id), buyerWallet);
-    await saleTx.wait();
+    // 온체인 리스팅 완료 처리 (데이터 불일치 방어막 가드)
+    let txFailedButNotListed = false;
+    try {
+      const saleTx = await ticketMarket.completeSale(parseInt(listing.token_id), buyerWallet);
+      await saleTx.wait();
+    } catch (contractErr) {
+      console.error("[DEBUG] completeSale error details:", {
+        message: contractErr.message,
+        code: contractErr.code,
+        reason: contractErr.reason,
+        revert: contractErr.revert
+      });
+      const errMsg = contractErr.message ? String(contractErr.message) : "";
+      const errReason = contractErr.reason ? String(contractErr.reason) : "";
+      const errCode = contractErr.code ? String(contractErr.code) : "";
+      const revertReason = (contractErr.revert && contractErr.revert.args && contractErr.revert.args[0]) ? String(contractErr.revert.args[0]) : "";
+
+      const isNotListed = 
+        errMsg.toLowerCase().includes("ticketmarket: not listed") ||
+        errReason.toLowerCase().includes("ticketmarket: not listed") ||
+        revertReason.toLowerCase().includes("ticketmarket: not listed") ||
+        errCode === "CALL_EXCEPTION";
+
+      if (isNotListed) {
+        txFailedButNotListed = true;
+      } else {
+        throw contractErr;
+      }
+    }
+
+    if (txFailedButNotListed) {
+      // 온체인의 실제 소유자 확인 (데이터 불일치 복구 플로우)
+      let currentOwnerWallet = null;
+      try {
+        currentOwnerWallet = await ticketNFT.ownerOf(parseInt(listing.token_id));
+      } catch (ownerErr) {
+        // 이미 소각되었거나 토큰이 존재하지 않는 경우 (예외 처리)
+        currentOwnerWallet = null;
+      }
+
+      if (!currentOwnerWallet || currentOwnerWallet.toLowerCase() === listing.seller_wallet.toLowerCase()) {
+        // 소유자가 판매자 본인이거나 토큰이 존재하지 않는 경우 -> 취소 처리 완료로 동기화
+        await db.query(
+          "UPDATE market_listings SET status = 'CANCELLED' WHERE id = $1",
+          [listingId]
+        );
+        return res.status(400).json({ error: "온체인에서 판매 대기 중(Listed) 상태가 아닌 리스팅입니다. DB 상태를 CANCELLED로 동기화했습니다. 판매자가 다시 등록해야 합니다." });
+      } else {
+        // 소유자가 타인(구매자 등)인 경우 -> 이미 양도가 완료된 상태이므로 SOLD 처리로 동기화
+        const buyerResult = await db.query(
+          "SELECT id FROM users WHERE LOWER(wallet_address) = $1",
+          [currentOwnerWallet.toLowerCase()]
+        );
+        if (buyerResult.rows.length > 0) {
+          const buyerId = buyerResult.rows[0].id;
+          await db.query(
+            "UPDATE tickets SET owner_id = $1, qr_version = qr_version + 1 WHERE id = $2",
+            [buyerId, listing.ticket_id]
+          );
+          await db.query(
+            "UPDATE market_listings SET status = 'SOLD' WHERE id = $1",
+            [listingId]
+          );
+          return res.status(400).json({ error: "이미 온체인에서 양도 완료된 티켓입니다. DB 상태를 SOLD로 동기화했습니다." });
+        } else {
+          return res.status(500).json({ error: "온체인의 티켓 소유 지갑 주소가 등록된 회원 정보에 없습니다." });
+        }
+      }
+    }
 
     // NFT 소유권 이전 (TicketNFT.adminTransfer)
     const transferTx = await ticketNFT.adminTransfer(
@@ -191,7 +257,24 @@ router.post("/cancel/:listingId", auth, async (req, res) => {
       const tx = await ticketMarket.cancel(parseInt(listing.token_id));
       await tx.wait();
     } catch (contractErr) {
-      if (contractErr.message.includes("TicketMarket: Not listed") || contractErr.code === "CALL_EXCEPTION") {
+      console.error("[DEBUG] cancel listing error details:", {
+        message: contractErr.message,
+        code: contractErr.code,
+        reason: contractErr.reason,
+        revert: contractErr.revert
+      });
+      const errMsg = contractErr.message ? String(contractErr.message) : "";
+      const errReason = contractErr.reason ? String(contractErr.reason) : "";
+      const errCode = contractErr.code ? String(contractErr.code) : "";
+      const revertReason = (contractErr.revert && contractErr.revert.args && contractErr.revert.args[0]) ? String(contractErr.revert.args[0]) : "";
+
+      const isNotListed = 
+        errMsg.toLowerCase().includes("ticketmarket: not listed") ||
+        errReason.toLowerCase().includes("ticketmarket: not listed") ||
+        revertReason.toLowerCase().includes("ticketmarket: not listed") ||
+        errCode === "CALL_EXCEPTION";
+
+      if (isNotListed) {
         txFailedButNotListed = true;
       } else {
         throw contractErr;
